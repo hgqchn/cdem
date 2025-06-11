@@ -2,6 +2,8 @@ import sys
 import os
 
 import numpy as np
+from functools import partial
+
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -15,14 +17,14 @@ import copy
 import record
 import utils
 import dem_features
-from SIREN import meta_modules
+
+from mymodel import modules,hyper_model,model
 from SIREN.dataset import DEMFolder, ImplicitDownsampled,value_denorm
-
-
+from mymodel.SwinIR import SwinEncoder
 
 if __name__ == '__main__':
     recorder=record.Recorder(logger=logging.getLogger(__name__),
-                             output_path=r'D:\codes\cdem\output\SIREN',
+                             output_path=r'D:\codes\cdem\output\mymodel_swin',
                              use_tensorboard=False,
                              )
     logger=recorder.get_logger()
@@ -36,9 +38,9 @@ if __name__ == '__main__':
     utils.seed_everything(utils.default_seed)
     device=utils.default_device
 
-    model_name="SIREN"
+    model_name="mymodel_swin"
     lr=1e-4
-    epochs=400
+    epochs=500
     batchsize=64
 
     current_time = utils.get_current_time()
@@ -50,7 +52,7 @@ if __name__ == '__main__':
     wandb.init(
         project="CDEM",
         name=f"{model_name}_{current_time}",
-        notes="SIREN demo",
+        notes="use swin as encoder",
         tags=[f"{model_name}", "Local"],
         mode="online", #online disabled offline
         config={
@@ -68,19 +70,36 @@ if __name__ == '__main__':
         "batchsize":batchsize,
     }
 
-    model_config={
-        "in_features": 1,
-        "out_features": 1,
-        "image_resolution": (16, 16),
-        "target_hidden": 64,
-        "target_hidden_layers": 3,
-        "use_pe": False,
+    swin_encoder_config={
+        "img_size": 16,
+        "patch_size": 1,
+        "in_chans": 1,
         "embed_dim": 256,
-        "hyper_hidden_layers": 2,
-        "hyper_hidden_features": 256
+        "depths": [4, 4, 4, 4],
+        "num_heads": [4, 4, 4, 4],
+        "window_size": 1,
+        "mlp_ratio": 4.0,
     }
 
-    config["model_config"]=model_config
+    target_config={
+        "out_features": 1,
+        "hidden_features": 64,
+        "num_hidden_layers": 3,
+        "image_resolution": (16, 16),
+    }
+
+    hyper_config={
+        "hyper_in_features": 256,
+        "hyper_hidden_layers": 3,
+        "hyper_hidden_features": 256,
+    }
+
+    model_config={}
+    model_config["encoder_config"]= swin_encoder_config
+    model_config["target_config"] = target_config
+    model_config["hyper_config"] = hyper_config
+    config["model_config"] = model_config
+
     wandb.config.update({"model_config": model_config})
     recorder.save_config_to_yaml(config)
 
@@ -117,14 +136,19 @@ if __name__ == '__main__':
     # 模型，优化器，调度器
 
 
-    model=meta_modules.ConvolutionalNeuralProcessImplicit2DHypernet(
-        **model_config
-    )
-    model.to(device)
+    target_net=modules.MLPwithPE(**target_config)
+    hyper_net=hyper_model.HyperNetwork(**hyper_config,
+                                       target_module=target_net)
+    encoder=SwinEncoder(**swin_encoder_config)
+
+    net=model.ImplicitModel(encoder=encoder,
+                             hyper_net=hyper_net,
+                             target_net=target_net)
+    net.to(device)
 
     criterion = nn.L1Loss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    lr_scheduler=torch.optim.lr_scheduler.StepLR(optimizer, step_size=150, gamma=0.5)
+    optimizer = torch.optim.Adam(net.parameters(), lr=lr)
+    lr_scheduler=torch.optim.lr_scheduler.StepLR(optimizer, step_size=200, gamma=0.5)
 
     start_epoch=1
     # for train
@@ -135,12 +159,12 @@ if __name__ == '__main__':
 
     best_epoch=0
     best_rmse=float('inf')
-    best_model = copy.deepcopy(model.state_dict())
+    best_model = copy.deepcopy(net.state_dict())
 
 
     #-----------------------------------------#
     for epoch in range(start_epoch,epochs+1):
-        model.train()
+        net.train()
         # 训练
         epoch_loss.reset()
         with tqdm(total=len(train_loader), desc=f'epoch {epoch}/{epochs} train', file=sys.stdout) as t:
@@ -151,7 +175,7 @@ if __name__ == '__main__':
                 gt=gt.to(device)
                 trans=trans.to(device)
 
-                model_out= model(input,hr_coord)
+                model_out= net(input,hr_coord)
                 sr_value=model_out['model_out']
 
                 loss=criterion(sr_value,gt)
@@ -175,7 +199,7 @@ if __name__ == '__main__':
         lr_scheduler.step()
 
         # 测试
-        model.eval()
+        net.eval()
         epoch_mae.reset()
         epoch_rmse.reset()
 
@@ -189,7 +213,7 @@ if __name__ == '__main__':
 
 
                 with torch.inference_mode():
-                    model_out = model(input, hr_coord)
+                    model_out = net(input, hr_coord)
                     sr_value = model_out['model_out']
 
                 sr_value=value_denorm(sr_value,trans)
@@ -220,17 +244,15 @@ if __name__ == '__main__':
         if epoch_rmse.avg < best_rmse:
             best_rmse = epoch_rmse.avg
             best_epoch = epoch
-            best_model=copy.deepcopy(model.state_dict())
+            best_model=copy.deepcopy(net.state_dict())
 
 
         if epoch % epoch_save == 0 or epoch == epochs:
             model_path = os.path.join(model_save_path, f'{model_name}_{epoch}.pth')
-            torch.save(model.state_dict(), model_path)
+            torch.save(net.state_dict(), model_path)
 
     best_model_path=os.path.join(model_save_path, f'best_{model_name}_{best_epoch}_{best_rmse:.4f}.pth')
     torch.save(best_model, best_model_path)
-
-
 
 
     wandb.finish()

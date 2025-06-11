@@ -83,7 +83,7 @@ class HyperNetwork(nn.Module):
 #  卷积作为编码器处理2D图像
 class ConvolutionalNeuralProcessImplicit2DHypernet(nn.Module):
     def __init__(self, in_features, out_features, image_resolution=None,
-                 target_hidden=256, target_hidden_layers=3,
+                 target_hidden=256, target_hidden_layers=3,use_pe=False,
                  embed_dim=256,hyper_hidden_layers=1, hyper_hidden_features=256
                  ):
         super().__init__()
@@ -91,7 +91,7 @@ class ConvolutionalNeuralProcessImplicit2DHypernet(nn.Module):
 
         self.encoder = modules.ConvImgEncoder(channel=in_features, image_resolution=image_resolution)
         self.target_net = modules.SimpleMLPNet(out_features=out_features, hidden_features=target_hidden, num_hidden_layers=target_hidden_layers,
-                                               image_resolution=image_resolution)
+                                               image_resolution=image_resolution,use_pe=use_pe)
         self.hyper_net = HyperNetwork(hyper_in_features=embed_dim, hyper_hidden_layers=hyper_hidden_layers, hyper_hidden_features=hyper_hidden_features,
                                       target_module=self.target_net)
         #print(self)
@@ -166,6 +166,13 @@ if __name__ == '__main__':
     hyper_net = HyperNetwork(hyper_in_features=256, hyper_hidden_layers=4,
                                   hyper_hidden_features=256,
                                   target_module=target_net)
+    test_embedding = torch.randn(8, 256)  # 假设的嵌入向量
 
+    # 大小为10的字典，10对应于target_net的参数数量
+    # 字典键为target_net的参数名称，值为对应的参数张量
+    #
+    generated_params = hyper_net(test_embedding)
+
+    target_net_params = OrderedDict(target_net.named_parameters())
 
     pass

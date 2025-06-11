@@ -61,10 +61,14 @@ class MetaSequential(nn.Sequential, MetaModule):
         return input
 
 
-# 处理batch
-# 输入形状为 [batch_size, sequence_length, in_features]
-# 参数形状为  [batch_size, in_features, out_features]
-# 输出形状为 [batch_size, sequence_length, out_features]
+# 可处理batch形状参数
+# input输入形状为 [batch_size, ..., in_features]
+# params参数形状为  [batch_size, out_features,in_features]
+# 输出形状为 [batch_size, ..., out_features]
+
+# 或者正常的线性层
+# 输入形状为 [..., in_features]，参数形状为 [out_features,in_features]
+# 输出形状为 [..., out_features]
 class BatchLinear(nn.Linear, MetaModule):
     '''A linear meta-layer that can deal with batched weight matrices and biases, as for instance output by a
     hypernetwork.'''
@@ -76,9 +80,15 @@ class BatchLinear(nn.Linear, MetaModule):
 
         bias = params.get('bias', None)
         weight = params['weight']
-        # 交换最后两个维度
+        # 其余维度不变，交换最后两个维度
+        # weight的形状为 [batchsize, out_features,in_features]
+        # 交换维度后的形状为 [batchsize, in_features,out_features]
+        # input的形状为 [batchsize,...,in_features]
+        # 得到的输出形状为 [batchsize,..., out_features]
         output = input.matmul(weight.permute(*[i for i in range(len(weight.shape) - 2)], -1, -2))
         # 倒数第二个维度添加偏置，正确广播运算
+        # bias的形状为 [batchsize, out_features]
+        # unsqueeze后 为 [batchsize, 1,out_features]
         output += bias.unsqueeze(-2)
         return output
 
@@ -150,6 +160,7 @@ class FCBlock(MetaModule):
         if params is None:
             params = OrderedDict(self.named_parameters())
 
+        # key 'net' 对应于self.net
         output = self.net(coords, params=get_subdict(params, 'net'))
         return output
 
@@ -183,13 +194,18 @@ class SimpleMLPNet(MetaModule):
                  out_features=1,
                  hidden_features=256,
                  num_hidden_layers=3,
+                 use_pe=True,
                  num_frequencies=8,
                  image_resolution=None,
                  ):
         super().__init__()
 
+        self.use_pe = use_pe
         self.positional_encoding = PosEncodingNeRF2D(num_frequencies=num_frequencies,sidelength=image_resolution)
-        in_features = self.positional_encoding.out_dim
+        if self.use_pe:
+            in_features = self.positional_encoding.out_dim
+        else:
+            in_features = 2
 
         self.net = FCBlock(in_features=in_features, out_features=out_features, num_hidden_layers=num_hidden_layers,
                            hidden_features=hidden_features, outermost_linear=True, nonlinearity='sine')
@@ -204,7 +220,8 @@ class SimpleMLPNet(MetaModule):
         coords = coords_org
 
         # various input processing methods for different applications
-        coords = self.positional_encoding(coords)
+        if self.use_pe:
+            coords = self.positional_encoding(coords)
 
         output = self.net(coords, get_subdict(params, 'net'))
         return {'model_in': coords_org, 'model_out': output}
@@ -214,6 +231,25 @@ class SimpleMLPNet(MetaModule):
         coords = coords.clone().detach().requires_grad_(True)
         activations = self.net.forward_with_activations(coords)
         return {'model_in': coords, 'model_out': activations.popitem(), 'activations': activations}
+
+    def forward_coord(self, coords, imagesize,params=None):
+        if params is None:
+            params = OrderedDict(self.named_parameters())
+
+        # Enables us to compute gradients w.r.t. coordinates
+        coords_org = coords.clone().detach().requires_grad_(True)
+        coords = coords_org
+
+        coords=(coords*2-1)/imagesize-1
+        # various input processing methods for different applications
+        coords = self.positional_encoding(coords)
+
+        output = self.net(coords, get_subdict(params, 'net'))
+
+        grad_outputs = torch.ones_like(output)
+        grad = torch.autograd.grad(output, coords_org, grad_outputs=grad_outputs, create_graph=True)[0]
+
+        return coords_org,output,grad
 
 class PosEncodingNeRF2D(nn.Module):
     '''Module to add positional encoding as in NeRF [Mildenhall et al. 2020].'''
@@ -239,6 +275,7 @@ class PosEncodingNeRF2D(nn.Module):
         self.out_dim = self.in_features + 2 * self.in_features * self.num_frequencies
 
     def get_num_frequencies_nyquist(self, samples):
+        # samples/4
         nyquist_rate = 1 / (2 * (2 * 1 / samples))
         return int(math.floor(math.log(nyquist_rate, 2)))
 
@@ -475,10 +512,27 @@ if __name__ == '__main__':
                             num_frequencies=8,
                             image_resolution=(16, 16))
 
-    model=simple_mlp
-    param_size=0
-    for param in model.parameters():
-        param_size+=param.numel()*param.element_size()  # 计算参数的字节大小
-    size_res=param_size/1024  # 返回参数的字节大小
+    # model=simple_mlp
+    # param_size=0
+    # for param in model.parameters():
+    #     param_size+=param.numel()*param.element_size()  # 计算参数的字节大小
+    # size_res=param_size/1024  # 返回参数的字节大小
 
+    batch_linear= BatchLinear(in_features=3, out_features=2)
+    print(batch_linear)
+    print(OrderedDict(batch_linear.named_parameters()))
+
+    test_input=torch.randn(5,4,3)
+    weight_params=nn.Parameter(torch.randn(5, 3, 2))
+    test_params={
+        'weight':  torch.randn(5, 2, 3),
+        'bias': torch.randn(5, 2)
+    }
+
+    out=batch_linear(test_input)
+    out2=batch_linear(test_input,test_params)
+
+    fcb_block= FCBlock(in_features=2, out_features=1, num_hidden_layers=3,hidden_features=4)
+    print(fcb_block)
+    print(OrderedDict(fcb_block.named_parameters()))
     pass

@@ -6,6 +6,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
+import matplotlib.pyplot as plt
+
 from SIREN import meta_modules,dataset,modules
 from utils import to_pixel_samples_tensor,torch_imresize
 import utils
@@ -28,6 +30,7 @@ class Slope_map(nn.Module):
         super(Slope_map, self).__init__()
         weight1 = np.zeros(shape=(3, 3), dtype=np.float32)
         weight2 = np.zeros(shape=(3, 3), dtype=np.float32)
+
 
         # -1 0 1
         # -2 0 2
@@ -56,6 +59,8 @@ class Slope_map(nn.Module):
 
         weight1 = np.reshape(weight1, (1, 1, 3, 3))
         weight2 = np.reshape(weight2, (1, 1, 3, 3))
+        weight1=weight1/8
+        weight2=weight2/8
 
         # nn.Parameter 注册为模型参数
         self.weight1 =nn.Parameter(torch.tensor(weight1)) # 自定义的权值
@@ -94,6 +99,15 @@ if __name__ == '__main__':
     hr_height=64
     hr_width=64
     scale=4
+
+    lr_file_path = r'D:\Data\DEM_data\dataset_TfaSR\(60mor120m)to30m\DEM_Test_NN_120m\dem_0\dem0_0.TIF'
+    hr_file_path = r'D:\Data\DEM_data\dataset_TfaSR\(60mor120m)to30m\DEM_Test\dem_0\dem0_0.TIF'
+    hr_dem = utils.read_dem(hr_file_path)
+    hr_dem = torch.from_numpy(hr_dem).unsqueeze(0).unsqueeze(0)
+    lr_dem = utils.read_dem(lr_file_path)
+    lr_dem = torch.from_numpy(lr_dem).unsqueeze(0).unsqueeze(0)
+    bic_dem = F.interpolate(lr_dem, scale_factor=scale, mode='bicubic')
+
     hr_coord = utils.get_pixel_center_coord_tensor((hr_height, hr_width))
     hr_coord = hr_coord.to(device).unsqueeze(0)  # Add batch dimension
 
@@ -101,83 +115,79 @@ if __name__ == '__main__':
     coord_grad=out['model_in']
     model_out=out['model_out']
 
+    coord_idx=torch.stack(torch.meshgrid(torch.arange(1,hr_height+1), torch.arange(1,hr_width+1),indexing='ij'), dim=-1)
+    coord_idx=coord_idx.view(-1,2).float()
+    coord_idx=coord_idx.to(device).unsqueeze(0)
 
-    lr_file_path = r'D:\Data\DEM_data\dataset_TfaSR\(60mor120m)to30m\DEM_Test_NN_120m\dem_0\dem0_0.TIF'
-    hr_file_path = r'D:\Data\DEM_data\dataset_TfaSR\(60mor120m)to30m\DEM_Test\dem_0\dem0_0.TIF'
-    hr_dem = utils.read_dem(hr_file_path)
-    hr_dem = torch.from_numpy(hr_dem).unsqueeze(0).unsqueeze(0)
+    input_coord,new_out,new_grad=model.forward_coord(coord_idx,imagesize=64)
 
-    lr_dem = utils.read_dem(lr_file_path)
-    lr_dem = torch.from_numpy(lr_dem).unsqueeze(0).unsqueeze(0)
-    bic_dem = F.interpolate(lr_dem, scale_factor=scale, mode='bicubic')
-
-    slope_map = Slope_map()
-    hr_slope,hr_dx,hr_dy=slope_map(hr_dem)
-    hr_slope=hr_slope[...,1:-1,1:-1]  # 去掉边缘
-    hr_dx=hr_dx[...,1:-1,1:-1]
-    hr_dy=hr_dy[...,1:-1,1:-1]
-
-    bic_slope,bic_dx,bic_dy=slope_map(bic_dem)
-    bic_slope=bic_slope[...,1:-1,1:-1]
-    bic_dx=bic_dx[...,1:-1,1:-1]
-    bic_dy=bic_dy[...,1:-1,1:-1]
-
-    bic_slope_mae=torch.mean(torch.abs(hr_slope-bic_slope))
-    bic_dx_mae= torch.mean(torch.abs(hr_dx-bic_dx))
-    bic_dy_mae= torch.mean(torch.abs(hr_dy-bic_dy))
 
     # 模型运算
     _, trans = dem_data_convert.tensor_maxmin_norm(lr_dem, (-1, 1), 1e-6,
                                                        None)
     sr_value = dataset.value_denorm(model_out, trans)
 
-    dydx_0=gradient(model_out, coord_grad, grad_outputs=torch.ones_like(model_out))
-    # 1,H*W,2
-    # dx,dy
-    dydx= gradient(sr_value, coord_grad, grad_outputs=torch.ones_like(model_out))
-    dydx_denorm=2/64*dydx
+    new_sr_value=dataset.value_denorm(new_out, trans)
+    new_dydx=gradient(new_sr_value, input_coord, grad_outputs=torch.ones_like(new_sr_value))
+    new_sr= new_sr_value.view(1, 1, hr_height, hr_width).cpu()
+    new_dx_,new_dy_=new_dydx[...,1],new_dydx[...,0]
+    new_dx_=new_dx_.view(1, 1, hr_height, hr_width).cpu()
+    new_dy_=new_dy_.view(1, 1, hr_height, hr_width).cpu()
 
     sr_dem = sr_value.view(1, 1, hr_height, hr_width).cpu()
+    slope_map = Slope_map()
     sr_dem_slope,sr_dem_dx,sr_dem_dy=slope_map(sr_dem)
-    sr_dem_slope=sr_dem_slope[...,1:-1,1:-1]
-    sr_dem_dx=sr_dem_dx[...,1:-1,1:-1]
-    sr_dem_dy=sr_dem_dy[...,1:-1,1:-1]
 
-    dx_,dy_=dydx_denorm[...,1],dydx_denorm[...,0]
-    dx_=dx_.view(1, 1, hr_height, hr_width).cpu()
-    dy_=dy_.view(1, 1, hr_height, hr_width).cpu()
-    dx_=dx_[...,1:-1,1:-1]
-    dy_=dy_[...,1:-1,1:-1]
 
-    hr_dem=hr_dem[...,1:-1,1:-1]
+    fig,axes=plt.subplots(1,3)
+    for ax in axes:
+        ax.axis('off')
+    axes[0].imshow(hr_dem.squeeze(0).squeeze(0).cpu().detach().numpy(), cmap='terrain')
+    axes[0].set_title('HR DEM')
+    axes[1].imshow(sr_dem.squeeze(0).squeeze(0).cpu().detach().numpy(), cmap='terrain')
+    axes[1].set_title('SR DEM')
+    axes[2].imshow(bic_dem.squeeze(0).squeeze(0).numpy(), cmap='terrain')
+    axes[2].set_title('Bicubic DEM')
 
-    # 计算插值的误差
-    bic_dem= bic_dem[...,1:-1,1:-1]
-    bic_dem_mae= torch.mean(torch.abs(hr_dem - bic_dem))
-    print(f"bic_dem_mae: {bic_dem_mae.item():.4f}\n"
-          f"bic_slope_mae: {bic_slope_mae.item():.4f}\n"
-          f"bic_dx_mae: {bic_dx_mae.item():.4f}\n"
-          f"bic_dy_mae: {bic_dy_mae.item():.4f}\n")
+    fig,axes=plt.subplots(1,2)
+    for ax in axes:
+        ax.axis('off')
+    ax1=axes[0].imshow((hr_dem-sr_dem).squeeze(0).squeeze(0).cpu().detach().numpy(), cmap='gray')
+    axes[0].set_title('SR DEM error')
 
-    # 计算模型超分得到的SR的误差
-    sr_dem=sr_dem[...,1:-1,1:-1]
-    sr_dem_mae=torch.mean(torch.abs(hr_dem - sr_dem))
-    sr_dem_slope_mae=torch.mean(torch.abs(hr_slope - sr_dem_slope))
-    sr_dem_dx_mae=torch.mean(torch.abs(hr_dx - sr_dem_dx))
-    sr_dem_dy_mae=torch.mean(torch.abs(hr_dy - sr_dem_dy))
-    print(f"sr_dem_mae: {sr_dem_mae.item():.4f}\n"
-          f"sr_dem_slope_mae: {sr_dem_slope_mae.item():.4f}\n"
-          f"sr_dem_dx_mae: {sr_dem_dx_mae.item():.4f}\n"
-          f"sr_dem_dy_mae: {sr_dem_dy_mae.item():.4f}\n")
+    axes[1].imshow((hr_dem-bic_dem).squeeze(0).squeeze(0).cpu().detach().numpy(), cmap='gray')
+    axes[1].set_title('Bic DEM error')
 
-    # 模型求导结果
-    dx_mae=torch.mean(torch.abs(hr_dx - dx_))
-    dy_mae=torch.mean(torch.abs(hr_dy - dy_))
-    print(f"dx_mae: {dx_mae.item():.4f}\n"
-          f"dy_mae: {dy_mae.item():.4f}\n")
+    fig.colorbar(ax1, ax=axes[0])
+
+
+
+    sr_error=(hr_dem-sr_dem).squeeze(0).squeeze(0).cpu().detach().numpy()
+    bic_error=(hr_dem-bic_dem).squeeze(0).squeeze(0).cpu().detach().numpy()
+    sr_error_sum=np.sum(np.abs(sr_error))
+    bic_error_sum=np.sum(np.abs(bic_error))
+
+    sr_dem_dx_np=sr_dem_dx.squeeze(0).squeeze(0).cpu().detach().numpy()
+    sr_dem_dx_show=sr_dem_dx_np[1:-1, 1:-1]  # 去除边缘
+    new_dx_np=new_dx_.squeeze(0).squeeze(0).cpu().detach().numpy()
+
+    fig,axes=plt.subplots(1,3,figsize=(13, 3))
+    for ax in axes:
+        ax.axis('off')
+    pos1=axes[0].imshow(hr_dem.squeeze(0).squeeze(0).cpu().detach().numpy(), cmap='terrain')
+    axes[0].set_title('HR DEM')
+    fig.colorbar(pos1, ax=axes[0])
+    pos2=axes[1].imshow(sr_dem_dx_show, cmap='viridis')
+    axes[1].set_title('SR DEM dx')
+    fig.colorbar(pos2, ax=axes[1])
+    pos3=axes[2].imshow(new_dx_np, cmap='viridis')
+    axes[2].set_title('dx')
+    fig.colorbar(pos3, ax=axes[2])
 
     # eval_res = dem_features.cal_DEM_metric(sr_dem, hr_dem, device=device)
 
+    plt.figure()
+    plt.imshow(new_dx_np)
 
 #     import numpy as np
 #     save_path=r'D:\codes\cdem\output\SIREN\test\test_dem'
@@ -189,8 +199,7 @@ if __name__ == '__main__':
 #     import imageio
 #     imageio.imwrite(os.path.join(save_path, "bic_dem.tif"), bic_dem, format='TIFF')
 
-
-
+    plt.show(block=True)
 
 
     pass

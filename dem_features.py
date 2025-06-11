@@ -7,8 +7,8 @@ import dem_data_convert
 #用于评估指标的计算
 
 class Slope_torch(nn.Module):
-    def __init__(self,pixel_size=30):
-        #pixel_size在实际计算坡度时使用
+    def __init__(self,pixel_size=1):
+        #pixel_size在实际计算坡度时使用,为空间分辨率
         super(Slope_torch, self).__init__()
         weight1 = np.zeros(shape=(3, 3), dtype=np.float32)
         weight2 = np.zeros(shape=(3, 3), dtype=np.float32)
@@ -54,60 +54,24 @@ class Slope_torch(nn.Module):
         dy = torch.conv2d(x, self.weight2, self.bias, stride=1, padding=1)
 
         slope = torch.sqrt(torch.pow(dx, 2) + torch.pow(dy, 2))
+        # 坡度值
         slope = torch.arctan(slope) * 180 / math.pi
         return slope
 
-
-# 其实就是边缘检测罢了，sobel算子
-class Slope_map(nn.Module):
-    def __init__(self):
-
-        super(Slope_map, self).__init__()
-        weight1 = np.zeros(shape=(3, 3), dtype=np.float32)
-        weight2 = np.zeros(shape=(3, 3), dtype=np.float32)
-
-        # -1 0 1
-        # -2 0 2
-        # -1 0 -1
-        weight1[0][0] = -1
-        weight1[0][1] = 0
-        weight1[0][2] = 1
-        weight1[1][0] = -2
-        weight1[1][1] = 0
-        weight1[1][2] = 2
-        weight1[2][0] = -1
-        weight1[2][1] = 0
-        weight1[2][2] = 1
-        # -1 -2 -1
-        # 0 0 0
-        # 1 2 1
-        weight2[0][0] = -1
-        weight2[0][1] = -2
-        weight2[0][2] = -1
-        weight2[1][0] = 0
-        weight2[1][1] = 0
-        weight2[1][2] = 0
-        weight2[2][0] = 1
-        weight2[2][1] = 2
-        weight2[2][2] = 1
-
-        weight1 = np.reshape(weight1, (1, 1, 3, 3))
-        weight2 = np.reshape(weight2, (1, 1, 3, 3))
-
-        # nn.Parameter 注册为模型参数
-        self.weight1 =nn.Parameter(torch.tensor(weight1)) # 自定义的权值
-        self.weight2 =nn.Parameter(torch.tensor(weight2))
-        self.bias = nn.Parameter(torch.zeros(1))  # 自定义的偏置
-        self.weight1.requires_grad = False
-        self.weight2.requires_grad = False
-        self.bias.requires_grad = False
-    def forward(self, x):
-        # x 为归一化的输入
+    def forward_dxdy(self, x):
+        """
+        计算dx和dy
+        :param x: 输入张量
+        :return: dx, dy, grad_norm
+        """
         dx = torch.conv2d(x, self.weight1, self.bias, stride=1, padding=1)
         dy = torch.conv2d(x, self.weight2, self.bias, stride=1, padding=1)
-        slope = torch.sqrt(torch.pow(dx, 2) + torch.pow(dy, 2))
 
-        return slope
+        grad_norm= torch.sqrt(torch.pow(dx, 2) + torch.pow(dy, 2))
+
+        return dx, dy,grad_norm
+
+
 
 #坡向
 class Aspect_torch(nn.Module):
@@ -159,52 +123,16 @@ class Aspect_torch(nn.Module):
         aspect = torch.where(aspect > 90, 360 - aspect + 90, 90 - aspect)
         return aspect
 
-class Aspect_map(nn.Module):
-    def __init__(self):
-        super(Aspect_map, self).__init__()
-        weight1 = np.zeros(shape=(3, 3), dtype=np.float32)
-        weight2 = np.zeros(shape=(3, 3), dtype=np.float32)
-
-        weight1[0][0] = -1
-        weight1[0][1] = 0
-        weight1[0][2] = 1
-        weight1[1][0] = -2
-        weight1[1][1] = 0
-        weight1[1][2] = 2
-        weight1[2][0] = -1
-        weight1[2][1] = 0
-        weight1[2][2] = 1
-
-        weight2[0][0] = -1
-        weight2[0][1] = -2
-        weight2[0][2] = -1
-        weight2[1][0] = 0
-        weight2[1][1] = 0
-        weight2[1][2] = 0
-        weight2[2][0] = 1
-        weight2[2][1] = 2
-        weight2[2][2] = 1
-
-        weight1 = np.reshape(weight1, (1, 1, 3, 3))
-        weight2 = np.reshape(weight2, (1, 1, 3, 3))
-
-        self.weight1 = nn.Parameter(torch.tensor(weight1))  # 自定义的权值
-        self.weight2 = nn.Parameter(torch.tensor(weight2))
-        self.bias =nn.Parameter(torch.zeros(1))  # 自定义的偏置
-        self.weight1.requires_grad = False
-        self.weight2.requires_grad = False
-        self.bias.requires_grad = False
-
-    def forward(self, x):
+    def forward_rad(self, x):
         # west point to east
         dx = torch.conv2d(x, self.weight1, self.bias, stride=1, padding=1)
         # north point to south
         dy = torch.conv2d(x, self.weight2, self.bias, stride=1, padding=1)
 
         # torch.atan2(-dy, dx) 返回向量(dx,-dy)与x轴正方向的弧度，范围在-pi到pi，逆时针为正
-        aspect = torch.atan2(-dy, dx)
+        aspect_rad = torch.atan2(-dy, dx)
 
-        return aspect
+        return aspect_rad
 
 
 Slope_net = Slope_torch()
@@ -435,10 +363,15 @@ def cal_batch_psnr(sr, hr, padding=None, data_range=1.0,reduction="mean"):
     return res.cpu().numpy()
 
 if __name__=="__main__":
-    test_dem=r'D:\Data\DEM_data\myDEM\ASTGTM2_N42E112_dem.tif'
+    # test_dem=r'D:\Data\DEM_data\myDEM\ASTGTM2_N42E112_dem.tif'
+    #
+    slope=Slope_map()
+    # device=torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    # slope.to(device)
+    # aspect=Aspect_torch()
+    # aspect.to(device)
 
-    slope=Slope_torch()
-    device=torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    slope.to(device)
-    aspect=Aspect_torch()
-    aspect.to(device)
+    input=torch.arange(1, 10).view(1,1,3,3).float()
+    dx,dy= slope.forward_dxdy(input)
+    crop_dx=dx[...,1:-1,1:-1]
+    pass

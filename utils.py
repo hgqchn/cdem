@@ -16,6 +16,11 @@ import cv2
 from datetime import datetime
 import time
 
+torch.set_printoptions(precision=6)
+
+os.environ["http_proxy"] = "http://127.0.0.1:7890"
+os.environ["https_proxy"] = "http://127.0.0.1:7890"
+
 default_seed=3407
 
 default_device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -58,6 +63,9 @@ def read_dem(dem_file: str):
     else:
         raise ValueError(f"Unsupported file format: {file_suffix}")
     return dem_data.astype(np.float32)
+
+def write_dem(dem_data, dem_file):
+    imageio.imwrite(dem_file, dem_data)
 
 def custom_logger(logger_name=__name__,log_filepath=None):
     logger=logging.getLogger(logger_name)
@@ -211,7 +219,8 @@ def get_current_time():
     return datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 
 # 根据输入的形状和范围（默认-1,1）
-# 生成网格坐标
+# shape=(H,W)
+# 生成网格坐标 (纵坐标，横坐标) 对应于H，W
 def get_pixel_center_coord_tensor(shape, ranges=None, flatten=True):
     """ Make coordinates at grid centers.
         ranges:2*2大小的 range[0]=() range[1]=() 网格边界的值
@@ -221,6 +230,8 @@ def get_pixel_center_coord_tensor(shape, ranges=None, flatten=True):
     # shape = [H, W]
     # i=0,n=H
     # i=1,n=W
+
+    shape= (shape,shape) if isinstance(shape, int) else shape
 
     # shape H,W
     for i, n in enumerate(shape):
@@ -273,7 +284,8 @@ def get_point_coord_tensor(sidelen, flatten=True):
     """
     if isinstance(sidelen, int):
         sidelen = 2 * (sidelen,)
-
+    # sidelen=(H,W)
+    # mgrid 先y后x 相当于meshgrid(np.arange(H), np.arange(W),indexing='ij')
     pixel_coords = np.stack(np.mgrid[:sidelen[0], :sidelen[1]], axis=-1).astype(np.float32)
     pixel_coords[:, :, 0] = pixel_coords[:, :, 0] / (sidelen[0] - 1)
     pixel_coords[:, :, 1] = pixel_coords[:, :, 1] / (sidelen[1] - 1)
@@ -286,6 +298,19 @@ def get_point_coord_tensor(sidelen, flatten=True):
         pixel_coords = pixel_coords.view(-1, 2)  # (H*W, 2)
     return pixel_coords
 
+def gradient(y, x, grad_outputs=None):
+    """
+    Calculate the gradient of y with respect to x.
+    :param y:
+    :param x:
+    :param grad_outputs:
+    :return: shape same as x, gradient of y with respect to x
+    """
+    if grad_outputs is None:
+        grad_outputs = torch.ones_like(y)
+    grad = torch.autograd.grad(y, [x], grad_outputs=grad_outputs, create_graph=True)[0]
+    return grad
+
 
 
 if __name__ == '__main__':
@@ -295,5 +320,9 @@ if __name__ == '__main__':
     # print(get_current_time())
     shape=(3,4)
     res1=get_pixel_center_coord_tensor(shape)
-    #res2=get_mgrid(shape)
+    res2=get_point_coord_tensor(shape)
+
+    #
+    np_res1=np.stack(np.mgrid[:3, :4], axis=-1)
+    np_res2=np.stack(np.meshgrid(np.arange(3),np.arange(4),indexing='ij'), axis=-1)
     pass

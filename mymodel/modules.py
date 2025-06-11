@@ -3,7 +3,7 @@ from torch import nn
 import numpy as np
 from collections import OrderedDict
 import math
-import torch.nn.functional as F
+
 
 import re
 
@@ -19,6 +19,7 @@ def get_subdict(dictionary, key=None):
     # layer1.weight -> weight
     return OrderedDict((key_re.sub(r'\1', k), value) for (k, value)
         in dictionary.items() if key_re.match(k) is not None)
+
 # 元模型的基类，元模型可以在前向过程中传入模型参数
 class MetaModule(nn.Module):
     """
@@ -68,14 +69,16 @@ class BatchLinear(nn.Linear, MetaModule):
     __doc__ = nn.Linear.__doc__
 
     def forward(self, input, params=None):
+
         if params is None:
             params = OrderedDict(self.named_parameters())
 
+        #
         bias = params.get('bias', None)
         weight = params['weight']
         # 交换最后两个维度
         output = input.matmul(weight.permute(*[i for i in range(len(weight.shape) - 2)], -1, -2))
-        # 倒数第二个维度添加偏置，正确广播运算
+        # 添加维度，正确广播运算
         output += bias.unsqueeze(-2)
         return output
 
@@ -172,7 +175,7 @@ class FCBlock(MetaModule):
                 activations['_'.join((str(sublayer.__class__), "%d" % i))] = x
         return activations
 
-
+# as target
 class MLPwithPE(MetaModule):
 
 
@@ -192,7 +195,7 @@ class MLPwithPE(MetaModule):
                            hidden_features=hidden_features, outermost_linear=True, nonlinearity='sine')
         #print(self)
 
-    def forward(self, coords, params=None):
+    def forward(self, coords, params=None,return_grad=False):
         if params is None:
             params = OrderedDict(self.named_parameters())
 
@@ -204,7 +207,12 @@ class MLPwithPE(MetaModule):
         coords = self.positional_encoding(coords)
 
         output = self.net(coords, get_subdict(params, 'net'))
-        return {'model_in': coords_org, 'model_out': output}
+
+        if return_grad:
+            dx_dy = gradient(output, coords_org, grad_outputs=torch.ones_like(output))
+            return {'model_in': coords_org, 'model_out': output,'dx_dy': dx_dy}
+        else:
+            return {'model_in': coords_org, 'model_out': output}
 
     def forward_with_activations(self, coords):
         '''Returns not only model output, but also intermediate activations.'''
@@ -324,6 +332,26 @@ class Conv2dResBlock(nn.Module):
 
 def channel_last(x):
     return x.transpose(1, 2).transpose(2, 3)
+
+
+
+def laplace(y, x):
+    grad = gradient(y, x)
+    return divergence(grad, x)
+
+
+def divergence(y, x):
+    div = 0.
+    for i in range(y.shape[-1]):
+        div += torch.autograd.grad(y[..., i], x, torch.ones_like(y[..., i]), create_graph=True)[0][..., i:i+1]
+    return div
+
+def gradient(y, x, grad_outputs=None):
+    if grad_outputs is None:
+        grad_outputs = torch.ones_like(y)
+    grad = torch.autograd.grad(y, [x], grad_outputs=grad_outputs, create_graph=True)[0]
+    return grad
+
 
 
 
