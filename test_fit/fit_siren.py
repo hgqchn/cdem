@@ -99,7 +99,7 @@ def gradient(y, x, grad_outputs=None):
 
 
 # 一次性读取图像所有像素点的坐标和值
-class ImageFitting(Dataset):
+class DEMFitting(Dataset):
     def __init__(self, dem):
         super().__init__()
         assert dem.ndim == 2
@@ -143,7 +143,7 @@ if __name__ == '__main__':
     hr_file_path = r'D:\Data\DEM_data\dataset_TfaSR\(60mor120m)to30m\DEM_Test\dem_0\dem0_0.TIF'
     hr_dem = utils.read_dem(hr_file_path)
 
-    dataset=ImageFitting(hr_dem)
+    dataset=DEMFitting(hr_dem)
     dataloader = DataLoader(dataset, batch_size=1, pin_memory=True, num_workers=0)
 
     model=modules.SimpleMLPNet(hidden_features=64,num_hidden_layers=3,image_resolution=(16,16),use_pe=True,num_frequencies=16)

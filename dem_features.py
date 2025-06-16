@@ -49,14 +49,18 @@ class Slope_torch(nn.Module):
         self.weight1.requires_grad = False
         self.weight2.requires_grad = False
         self.bias.requires_grad = False
-    def forward(self, x):
+    def forward(self, x,return_dxdy=False):
         dx = torch.conv2d(x, self.weight1, self.bias, stride=1, padding=1)
         dy = torch.conv2d(x, self.weight2, self.bias, stride=1, padding=1)
 
         slope = torch.sqrt(torch.pow(dx, 2) + torch.pow(dy, 2))
         # 坡度值
         slope = torch.arctan(slope) * 180 / math.pi
-        return slope
+
+        if return_dxdy:
+            return dx, dy, slope
+        else:
+            return slope
 
     def forward_dxdy(self, x):
         """
@@ -135,10 +139,10 @@ class Aspect_torch(nn.Module):
         return aspect_rad
 
 
-Slope_net = Slope_torch()
+Slope_net = Slope_torch(pixel_size=30)
 Aspect_net = Aspect_torch()
 
-def cal_DEM_metric(demA, demB, padding=None, device=None, reduction="mean"):
+def cal_DEM_metric(demA, demB, padding=None, device=None, reduction="mean",slope_net=Slope_net, aspect_net=Aspect_net):
     """
     input ndarray or tensor
     :param demA demB: B 1 H W
@@ -164,21 +168,23 @@ def cal_DEM_metric(demA, demB, padding=None, device=None, reduction="mean"):
         demA_tensor=demA
         demB_tensor=demB
 
+    slope_net=slope_net
+    aspect_net=aspect_net
     if device:
-        Slope_net.to(device)
-        Aspect_net.to(device)
+        slope_net.to(device)
+        aspect_net.to(device)
         demA_tensor=demA_tensor.to(device)
         demB_tensor=demB_tensor.to(device)
     else:
         if demA_tensor.is_cuda:
             device=demA_tensor.device
-            Slope_net.to(device)
-            Aspect_net.to(device)
+            slope_net.to(device)
+            aspect_net.to(device)
     with torch.inference_mode():
-        demA_slope = Slope_net(demA_tensor)
-        demB_slope = Slope_net(demB_tensor)
-        demA_aspect = Aspect_net(demA_tensor)
-        demB_aspect = Aspect_net(demB_tensor)
+        demA_slope = slope_net(demA_tensor)
+        demB_slope = slope_net(demB_tensor)
+        demA_aspect = aspect_net(demA_tensor)
+        demB_aspect = aspect_net(demB_tensor)
 
     height_mae=torch.abs(demA_tensor - demB_tensor).mean(dim=(1,2,3))
     height_rmse=torch.sqrt(torch.mean(torch.pow(demA_tensor - demB_tensor, 2), dim=(1,2,3)))
@@ -365,7 +371,7 @@ def cal_batch_psnr(sr, hr, padding=None, data_range=1.0,reduction="mean"):
 if __name__=="__main__":
     # test_dem=r'D:\Data\DEM_data\myDEM\ASTGTM2_N42E112_dem.tif'
     #
-    slope=Slope_map()
+    slope=Slope_torch()
     # device=torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     # slope.to(device)
     # aspect=Aspect_torch()

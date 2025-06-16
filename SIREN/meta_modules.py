@@ -21,14 +21,14 @@ class HyperNetwork(nn.Module):
         '''
         super().__init__()
 
-        hypo_parameters = target_module.meta_named_parameters()
+        target_parameters = target_module.meta_named_parameters()
 
         self.names = []
         self.nets = nn.ModuleList()
         self.param_shapes = []
         # 目标网络的每个参数都需要一个对应的MLP来预测
         # 即线性层的每个weight和bias分别需要一个MLP来预测
-        for name, param in hypo_parameters:
+        for name, param in target_parameters:
             self.names.append(name)
             self.param_shapes.append(param.size())
 
@@ -72,12 +72,9 @@ class HyperNetwork(nn.Module):
         '''
         params = OrderedDict()
         for name, net, param_shape in zip(self.names, self.nets, self.param_shapes):
-            batch_param_shape = (-1,) + param_shape
-            params[name] = net(z).reshape(batch_param_shape)
+            params[name] = net(z).reshape(param_shape)
         return params
-    #
-    # for name,param in params.items():
-    #     param[name].squeeze_(0)
+
 
 
 #  卷积作为编码器处理2D图像
@@ -174,5 +171,8 @@ if __name__ == '__main__':
     generated_params = hyper_net(test_embedding)
 
     target_net_params = OrderedDict(target_net.named_parameters())
+
+    test_simple_embedding=torch.randn(1,256)
+    generated_params_single = hyper_net.forward_singlesample(test_simple_embedding)
 
     pass

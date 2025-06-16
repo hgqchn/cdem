@@ -1,11 +1,19 @@
 import sys
 import os
 import numpy as np
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Union
+from natsort import natsorted
+import glob
+import importlib
+import pydoc
+from functools import partial
+
 import imageio.v3 as imageio
 import logging
 import pandas as pd
-
-from natsort import natsorted
 
 import torch
 import torch.nn.functional as F
@@ -13,8 +21,6 @@ import torch.nn.functional as F
 import random
 import cv2
 
-from datetime import datetime
-import time
 
 torch.set_printoptions(precision=6)
 
@@ -312,6 +318,381 @@ def gradient(y, x, grad_outputs=None):
     return grad
 
 
+def laplace(y, x):
+    grad = gradient(y, x)
+    return divergence(grad, x)
+
+
+def divergence(y, x):
+    div = 0.
+    for i in range(y.shape[-1]):
+        div += torch.autograd.grad(y[..., i], x, torch.ones_like(y[..., i]), create_graph=True)[0][..., i:i+1]
+    return div
+
+
+def arange_inclusive(start,stop,step):
+    """
+    类似于 np.arange，但确保 stop 被包含在结果中（如果刚好能整除步长）。
+
+    参数:
+        start (float): 起始值
+        stop (float): 终止值，包含
+        step (float): 步长，必须为正数
+
+    返回:
+        np.ndarray: 包含右端点的等步长数列
+    """
+    #arr=np.arange(start,stop+1e-8,step)
+
+    num = int(round((stop - start) / step)) + 1
+    return np.linspace(start, start + step * (num - 1), num)
+
+
+def sort_list_dict(data,sort_key,reverse=False):
+    """
+    data为字典，每个键对应一个等长列表，按照某个键的列表进行排序，对其他列表对应调整。默认升序
+    将字典 data 中所有的列表，按照 data[sort_key] 的值排序后同步重排。
+    参数:
+        data: Dict[Any, List[Any]]
+            原始字典，每个键对应一个等长列表。
+        sort_key: Any
+            用于排序的键，必须是 data 的一个键。
+        reverse: bool
+            是否降序排序（True 表示降序，默认升序）。
+
+    返回:
+        sorted_data: Dict[Any, List[Any]]
+            新字典，和 data 结构一致，但所有列表都已按 sort_key 排序完毕。
+    """
+    # 1. 检查
+    if sort_key not in data:
+        raise KeyError(f"sort_key `{sort_key}` 不在字典中")
+    N = len(data[sort_key])
+    for k, lst in data.items():
+        if len(lst) != N:
+            raise ValueError(f"所有列表长度必须相同，`{k}` 的长度不为 {N}")
+
+    # 2. 转成 NumPy 数组，方便用 argsort
+    arrs = {k: np.array(v) for k, v in data.items()}
+
+    # 3. 计算排序索引
+    idxs = np.argsort(arrs[sort_key])
+    if reverse:
+        idxs = idxs[::-1]
+
+    # 4. 用 fancy indexing 重排，并转回 Python 列表
+    sorted_data = {k: arrs[k][idxs].tolist() for k in data}
+    return sorted_data
+
+
+def sort_dict(dict):
+    sorted_keys = natsorted(dict.keys())
+    sorted_dict = {key: dict[key] for key in sorted_keys}
+    return sorted_dict
+
+
+class Timer():
+    def __init__(self):
+        self.times = []
+        self.start()
+
+    def start(self):
+        #self.tik = time.time()
+        self.tik = time.perf_counter()
+
+    # stop之后需要start
+    def stop(self):
+        #self.times.append(time.time() - self.tik)
+        self.times.append(time.perf_counter() - self.tik)
+        return self.times[-1]
+    def get_last(self):
+        return self.times[-1] if self.times else 0
+    def avg(self):
+        return sum(self.times) / len(self.times) if self.times else 0
+
+    def sum(self):
+        return sum(self.times)
+
+    def cumsum(self):
+        return np.array(self.times).cumsum().tolist()
+
+    def reset(self):
+        self.times.clear()
+
+
+def time_text(t):
+    if t >= 3600:
+        return '{:.1f}h'.format(t / 3600)
+    elif t >= 60:
+        return '{:.1f}m'.format(t / 60)
+    else:
+        return '{:.1f}s'.format(t)
+
+def second_to_min_sec(seconds):
+    """
+    将秒转换为分钟和秒的格式
+    :param seconds: 输入的秒数
+    :return: str 格式为 "mm:ss"
+    """
+    minutes = int(seconds // 60)  # 获取分钟数
+    seconds = int(seconds % 60)  # 获取秒数
+    return f"{minutes:02}:{seconds:02}"  # 格式化为 "mm:ss" 的字符串
+
+
+
+def compose_multi_avg(epoch_avg):
+    """
+
+    :param epoch_avg: {"psnr":AverageMeter(),"ssim":AverageMeter()}
+    :return: string
+    """
+    str=""
+    for key,avg_meter in epoch_avg.items():
+        str+=f"{key}={epoch_avg[key].avg:.6f}\t"
+    return str
+
+#多个变量的累加器
+class Accumulator:
+    def __init__(self, n):
+        self.data = [0.0] * n
+
+    #传入参数数量与变量个数一致
+    def add(self, *args):
+        self.data = [a + float(b) for a, b in zip(self.data, args)]
+
+    def reset(self):
+        self.data = [0.0] * len(self.data)
+
+    def __getitem__(self, idx):
+        return self.data[idx]
+
+
+
+
+image_extensions = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif')
+
+
+
+def is_image_file(filename):
+    #return any(filename.endswith(extension) for extension in ['.png', '.jpg', '.jpeg', '.PNG', '.bmp'])
+    return filename.lower().endswith(image_extensions)
+
+
+def get_image_paths_v1(imagedir):
+    # only get image paths in input directory
+    img_list = natsorted([os.path.join(imagedir, x) for x in os.listdir(imagedir) if is_image_file(x)])
+    return img_list
+
+# slower than v1
+def get_image_paths_all_v2(image_dir):
+    folder_path = Path(image_dir)
+    #recursive glob match all files and directories
+    image_files = [str(file) for file in folder_path.rglob('*') if file.suffix.lower() in image_extensions]
+    return natsorted(image_files)
+
+def get_image_paths_all_v1(image_dir):
+    """
+    get all image paths in a directory, including subdirectories.
+    :param image_dir:
+    :return:
+    """
+    image_files = []
+    # using os.walk to traverse all subdirectories
+    for root, dirs, files in os.walk(image_dir):
+        for file in files:
+
+            if file.lower().endswith(image_extensions):
+                image_files.append(os.path.join(root, file))
+    return natsorted(image_files)
+
+
+def get_foldername(path):
+    folder_name = os.path.basename(os.path.normpath(path))
+    return folder_name
+def get_dirname(filepath):
+
+    return os.path.dirname(filepath)
+
+
+#
+# glob模块支持的通配符
+# *: 匹配0个或多个字符（不包括目录分隔符）
+# ?: 匹配任意单个字符
+# [seq]: 匹配seq中的任意字符
+# [!seq]: 匹配不在seq中的任意字符
+# **: 匹配所有目录和子目录（仅当recursive=True时有效）
+def get_files_by_pattern(directory, pattern):
+    """
+    获取指定目录下匹配特定模式的所有文件路径
+    参数:
+        directory (str): 要搜索的目录路径
+        pattern (str): 文件名匹配模式，支持glob通配符，如'*.txt', 'data_*.csv'等
+    返回:
+        list: 匹配模式的文件路径列表，按自然排序
+    """
+    search_pattern = os.path.join(directory, pattern)
+    file_paths = glob.glob(search_pattern)
+    return natsorted(file_paths)
+
+def get_files_by_pattern_recursive(directory, pattern):
+    """
+    递归获取指定目录及其子目录下匹配特定模式的所有文件路径
+    参数:
+        directory (str): 要搜索的目录路径
+        pattern (str): 文件名匹配模式，支持glob通配符，如'*.txt', 'data_*.csv'等
+    返回:
+        list: 匹配模式的文件路径列表，按自然排序
+    """
+    search_pattern = os.path.join(directory, '**', pattern)
+    file_paths = glob.glob(search_pattern, recursive=True)
+    return natsorted(file_paths)
+
+
+def get_nested_cfgstr(cfg_dict:Union[dict,list],indent_num=0)-> str:
+    """
+    my simple implementation of the codes: OmegaConf.to_yaml(cfg_dict)
+    :param cfg_dict: python dict or list from OmegaConf.to_container(cfg,resolve=True) cfg is DictConfig class
+    :param indent_num: initial indent numbers
+    :return: str
+    """
+    str=""
+    if isinstance(cfg_dict,dict):
+        for key, value in cfg_dict.items():
+            str+=" "*indent_num+f"'{key}': "
+            if isinstance(value, dict):
+                str+="\n"
+                str+=get_nested_cfgstr(value,indent_num+4)
+            elif isinstance(value, list):
+                str+="\n"
+                str+=get_nested_cfgstr(value,indent_num+2)
+            else:
+                str+=f"{value}\n"
+    if isinstance(cfg_dict, list):
+        for item in cfg_dict:
+            str += " " * indent_num + "- "
+            if isinstance(item, dict):
+                str += "\n"
+                str+=get_nested_cfgstr(item,indent_num+2)
+            elif isinstance(item, list):
+                str += "\n"
+                str+=get_nested_cfgstr(item,indent_num+2)
+            else:
+                str+=f"{item}\n"
+    return str
+def data_equal(a,b,epison=1e-6):
+    import torch
+    if (type(a)!=type(b)):
+        raise TypeError(f"类型不匹配: {type(a).__name__} 与 {type(b).__name__}")
+    if isinstance(a,np.ndarray):
+        return np.allclose(a,b,atol=epison)
+    elif isinstance(a,torch.Tensor):
+        return torch.allclose(a,b,atol=epison)
+    else:
+        raise NotImplementedError
+
+
+def check_device(model):
+    device = next(model.parameters()).device
+    print(f"model is on device: {device}")
+    return device
+
+
+
+# 获取路径下的全部checkpoint，返回间隔epoch_inter的checkpoint列表
+# checkpoint命名格式为 model_{epoch}_{loss}.pth
+def get_ckpts(dir,epoch_inter=100):
+    files=os.listdir(dir)
+    result=[]
+    for filename in files:
+        if filename.endswith('.pth'):
+            epoch_str=filename.split('.')[0].split('_')[1]
+            try:
+                epoch=int(epoch_str)
+                if epoch % epoch_inter == 0:
+                    file_path=os.path.join(dir,filename)
+                    result.append(file_path)
+            except ValueError:
+                print(f'Invalid filename: {filename}')
+    return result
+
+
+def get_project_root():
+    """
+    返回项目根目录的绝对路径。
+    **本文件**需要被放在项目根目录下的某个子目录里。
+    """
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+def get_path_from_root(*relative_path_parts):
+    """
+    从项目根目录构造路径，自动适配系统路径分隔符。
+    参数可以是多个字符串，像 os.path.join 一样拼接。
+    例：get_path_from_root("models", "my_model.pth")
+    """
+    root = get_project_root()
+    root = Path(root)          # 确保是 Path 类型
+    return str(root.joinpath(*relative_path_parts))
+
+
+def windows_to_linux_path(windows_path: str) -> str:
+    """
+    将 Windows 路径转换为 Linux 风格路径（适用于标准转换或 WSL 场景）
+    示例：
+    windows_to_linux_path("Users\\MyName\\data\\file.txt")
+    => "Users/MyName/data/file.txt"
+    """
+    # 替换反斜杠为正斜杠
+    path = windows_path.replace("\\", "/")
+    return path
+
+
+def get_object_path(object):
+    return object.__module__ + '.' + object.__class__.__name__
+
+def get_object_from_path_v1(class_path):
+    module_path, object_name = class_path.rsplit(".", 1)  # 从右边拆成模块名和类名
+    try:
+        module = importlib.import_module(module_path)             # 动态导入模块
+    except ImportError as e:
+        raise ImportError(f"{e} 无法导入模块 {module_path}")
+    try:
+        obj= getattr(module, object_name)
+    except AttributeError as e:
+        raise AttributeError(f"{e} 模块 {module_path} 中不存在 {object_name} 的对象")
+
+    return obj
+
+def get_object_from_path_v2(object_path):
+    object= pydoc.locate(object_path)
+    if object is None:
+        raise ImportError(f"无法导入对象 {object_path}")
+    return object
+
+def instantiate_object(class_path,*args,**kwargs):
+    object=get_object_from_path_v1(class_path)
+
+    # 判断获取的对象是否为类
+    if not isinstance(object, type):
+        raise TypeError(f"{class_path} 不是一个类，而是 {type(object)}")
+    try:
+        # 实例化类并返回对象
+        instance = object(*args, **kwargs)
+        return instance
+    except Exception as e:
+        raise TypeError(f"实例化类 {class_path} 失败: {e}")
+
+def partial_function(func,*args,**kwargs):
+    if isinstance(func,str):
+        func=get_object_from_path_v1(func)
+
+    if not callable(func):
+        raise TypeError(f"{func}不是可调用对象")
+    try:
+        #
+        func_partial = partial(func, *args, **kwargs)
+        return func_partial
+    except Exception as e:
+        raise TypeError(f"partial 失败: {e}")
 
 if __name__ == '__main__':
     #print(__name__)
@@ -325,4 +706,40 @@ if __name__ == '__main__':
     #
     np_res1=np.stack(np.mgrid[:3, :4], axis=-1)
     np_res2=np.stack(np.meshgrid(np.arange(3),np.arange(4),indexing='ij'), axis=-1)
+
+    # filename = r'1.tif'
+    # print(is_image_file(filename))
+    #raise ShowError("adsdasdasasd")
+    # file_path=r'D:\Data\DEM_data\dataset_TfaSR\(60mor120m)to30m\DEM_Train'
+    # res=get_image_paths_all_v1(file_path)
+
+
+    # dir=r'D:\Data\DEM_data'
+    # pattern='*2m.dem'
+    # res=get_files_by_pattern_recursive(dir,pattern)
+
+    # data = {
+    #     'a': [3, 1, 2],
+    #     'b': ['apple', 'banana', 'cherry'],
+    #     'c': [30.0, 10.0, 20.0],}
+    #
+    # # 按 'a' 升序排序
+    # asc = sort_list_dict(data, sort_key='a')
+    # print("升序 →", asc)
+    # # 输出: {'a': [1,2,3], 'b': ['banana','cherry','apple'], 'c': [10.0,20.0,30.0]}
+    #
+    # # 按 'c' 降序排序
+    # desc = sort_list_dict(data, sort_key='a', reverse=True)
+    # print("降序 →", desc)
+    #test=r'D:\codes\diffusion_dem_sr\weight_file\official_unet.pth'
+    #print(windows_to_linux_path(test))
+
+    # str1=r'123\123'
+    # str2='123\\123'
+    # str11=str1.replace('\\','/')
+    # str22=str2.replace('\\','/')
+
+    output_path=get_path_from_root('output/ResDiff/test_server')
+    print(output_path)
+    # make_dir(output_path)
     pass

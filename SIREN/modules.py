@@ -6,6 +6,7 @@ import math
 import torch.nn.functional as F
 
 import re
+from utils import gradient
 
 # 获取模型参数
 # 参数是字典，根据key获取子字典
@@ -211,7 +212,7 @@ class SimpleMLPNet(MetaModule):
                            hidden_features=hidden_features, outermost_linear=True, nonlinearity='sine')
         #print(self)
 
-    def forward(self, coords, params=None):
+    def forward(self, coords, params=None,return_grad=False):
         if params is None:
             params = OrderedDict(self.named_parameters())
 
@@ -224,7 +225,12 @@ class SimpleMLPNet(MetaModule):
             coords = self.positional_encoding(coords)
 
         output = self.net(coords, get_subdict(params, 'net'))
-        return {'model_in': coords_org, 'model_out': output}
+
+        if return_grad:
+            dy_dx = gradient(output, coords_org, grad_outputs=torch.ones_like(output))
+            return {'model_in': coords_org, 'model_out': output, 'dy_dx': dy_dx}
+        else:
+            return {'model_in': coords_org, 'model_out': output}
 
     def forward_with_activations(self, coords):
         '''Returns not only model output, but also intermediate activations.'''
@@ -232,24 +238,7 @@ class SimpleMLPNet(MetaModule):
         activations = self.net.forward_with_activations(coords)
         return {'model_in': coords, 'model_out': activations.popitem(), 'activations': activations}
 
-    def forward_coord(self, coords, imagesize,params=None):
-        if params is None:
-            params = OrderedDict(self.named_parameters())
 
-        # Enables us to compute gradients w.r.t. coordinates
-        coords_org = coords.clone().detach().requires_grad_(True)
-        coords = coords_org
-
-        coords=(coords*2-1)/imagesize-1
-        # various input processing methods for different applications
-        coords = self.positional_encoding(coords)
-
-        output = self.net(coords, get_subdict(params, 'net'))
-
-        grad_outputs = torch.ones_like(output)
-        grad = torch.autograd.grad(output, coords_org, grad_outputs=grad_outputs, create_graph=True)[0]
-
-        return coords_org,output,grad
 
 class PosEncodingNeRF2D(nn.Module):
     '''Module to add positional encoding as in NeRF [Mildenhall et al. 2020].'''
@@ -258,18 +247,18 @@ class PosEncodingNeRF2D(nn.Module):
         """
 
         :param num_frequencies:
-        :param sidelength: for nyquist compute max number of frequencies
+        :param sidelength: for nyquist compute max number of frequencies image size
         :param use_nyquist:
         """
         super().__init__()
 
         self.in_features = 2  # x and y coordinates
 
-        assert sidelength is not None
-        if isinstance(sidelength, int):
-            sidelength = (sidelength, sidelength)
         self.num_frequencies = num_frequencies
         if use_nyquist:
+            assert sidelength is not None
+            if isinstance(sidelength, int):
+                sidelength = (sidelength, sidelength)
             self.num_frequencies = self.get_num_frequencies_nyquist(min(sidelength[0], sidelength[1]))
 
         self.out_dim = self.in_features + 2 * self.in_features * self.num_frequencies

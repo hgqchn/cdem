@@ -4,8 +4,6 @@ import torch
 from torch import nn
 from collections import OrderedDict
 
-from mymodel import modules,hyper_model
-
 
 class ImplicitModel(nn.Module):
     def __init__(self, encoder,hyper_net,target_net):

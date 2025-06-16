@@ -58,8 +58,10 @@ class Recorder():
             #self.logger.info("Logger initialized, handlers already exist")
             pass
 
-
-        self.logger.info(f"outfile: {outfile}, save path: {self.save_path}")
+        if outfile:
+            self.logger.info(f"outfile: {outfile}, save path: {self.save_path}")
+        else:
+            self.logger.info(f"outfile: {outfile}, no save path, only console output")
 
 
     def get_file_handler(self, log_path, level=logging.INFO):

@@ -1,0 +1,73 @@
+output_path: output/example
+
+
+
+model_name: example
+scale: 4
+lr: 0.0001
+epochs: 1
+timesteps: 2
+batchsize: 16
+flag: train
+
+
+train_loader_config:
+  dataset: dem_utils.dem_datasets.tfasr_120to30_train_down_nearest
+  batch_size: ${batchsize}
+  shuffle: True
+  pin_memory: True
+  num_workers: 4
+test_loader_config:
+  dataset: dem_utils.dem_datasets.tfasr_120to30_test_down_nearest
+  batch_size: ${batchsize}
+  shuffle: False
+  pin_memory: True
+  num_workers: 4
+
+
+
+pretrained_config:
+  sr_net: models.TfaSR.tfasr.Netv2
+  model_kwargs:
+    n_residual_blocks: 16
+    upsample_factor: 4
+  weight_path: D:\codes\diffusion_dem_sr\output\TfaSRv2\2025-03-23_16-10-06\checkpoint\tfasr_100.pth
+
+unet_config:
+  unet: models.my_diff.v1.unet.UNet
+  model_kwargs:
+    channels_in: 2
+    channels_out: 1
+    channels_inner: 64
+    norm_groups: 32
+    channel_mult:
+    - 1
+    - 2
+    - 4
+    - 8
+    attn_res:
+    - 4
+    - 8
+    num_res_blocks: 4
+    dropout: 0.1
+    num_heads: 4
+    use_scale_shift_norm: true
+
+diffusion_config:
+  diffusion: models.my_diff.v1.diffusion.GaussianDiffusion
+  betas_config:
+    schedule: linear
+    linear_start: 0.0001
+    linear_end: 0.01
+  other_kwargs:
+    scale: ${scale}
+    res: True
+    loss_type: l2
+
+model_config:
+  model_path: models.TfaSR.tfasr.Net
+  model_kwargs:
+    n_residual_blocks: 16
+    upsample_factor: 4
+
+
