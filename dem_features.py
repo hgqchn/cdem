@@ -147,7 +147,7 @@ def cal_DEM_metric(demA, demB, padding=None, device=None, reduction="mean",slope
     input ndarray or tensor
     :param demA demB: B 1 H W
     :param padding: to be cropped
-    :reduction: batch mean or none
+    :reduction: batch mean or batch res
     :return: {
         'height_mae':
         'slope_mae':
@@ -205,7 +205,7 @@ def cal_DEM_metric(demA, demB, padding=None, device=None, reduction="mean",slope
         aspect_mae=aspect_mae.mean()
         slope_rmse=slope_rmse.mean()
         aspect_rmse=aspect_rmse.mean()
-
+    # if None return list, size B
     return {
         'height_mae': height_mae.cpu().numpy(),
         'height_rmse': height_rmse.cpu().numpy(),
@@ -371,13 +371,17 @@ def cal_batch_psnr(sr, hr, padding=None, data_range=1.0,reduction="mean"):
 if __name__=="__main__":
     # test_dem=r'D:\Data\DEM_data\myDEM\ASTGTM2_N42E112_dem.tif'
     #
-    slope=Slope_torch()
-    # device=torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    # slope.to(device)
-    # aspect=Aspect_torch()
-    # aspect.to(device)
+    # slope=Slope_torch()
+    # # device=torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    # # slope.to(device)
+    # # aspect=Aspect_torch()
+    # # aspect.to(device)
+    #
+    # input=torch.arange(1, 10).view(1,1,3,3).float()
+    # dx,dy= slope.forward_dxdy(input)
+    # crop_dx=dx[...,1:-1,1:-1]
 
-    input=torch.arange(1, 10).view(1,1,3,3).float()
-    dx,dy= slope.forward_dxdy(input)
-    crop_dx=dx[...,1:-1,1:-1]
+    dem_a=torch.randn(2,1,32,32)
+    dem_b=torch.randn(2,1,32,32)
+    res=cal_DEM_metric(dem_a,dem_b,reduction=None)
     pass

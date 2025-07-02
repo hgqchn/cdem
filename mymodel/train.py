@@ -7,7 +7,7 @@ from functools import partial
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-
+from torch.nn.utils import clip_grad_norm_
 import logging
 import wandb
 from tqdm import tqdm
@@ -19,22 +19,35 @@ import utils
 import dem_features
 
 from SIREN import meta_modules,modules
+
 from SIREN.dataset import DEMFolder, ImplicitDownsampled,value_denorm
 from mymodel.model import ImplicitModel
 from mymodel.SwinIR import SwinEncoder
 
+#torch.autograd.set_detect_anomaly(True)
+
 if __name__ == '__main__':
+
+    debug=True
+    if debug:
+        outfile=False
+        wandb_mode='disabled'
+    else:
+        outfile=True
+        wandb_mode='online'
+
     recorder=record.Recorder(logger=logging.getLogger(__name__),
                              output_path=r'D:\codes\cdem\output\mymodel_swin',
                              use_tensorboard=False,
-                             extra_name="usePE",
+                             outfile=outfile,
                              )
     logger=recorder.get_logger()
 
-    #模型权重文件保存路径
-    save_path=recorder.save_path
-    model_save_path=os.path.join(save_path,'checkpoint')
-    utils.make_dir(model_save_path)
+    if outfile:
+        #模型权重文件保存路径
+        save_path=recorder.save_path
+        model_save_path=os.path.join(save_path,'checkpoint')
+        utils.make_dir(model_save_path)
     epoch_save = 100
 
     utils.seed_everything(utils.default_seed)
@@ -42,8 +55,8 @@ if __name__ == '__main__':
 
     model_name="mymodel_swin"
     lr=1e-4
-    epochs=300
-    batchsize=64
+    epochs=500
+    batchsize=32
 
     current_time = utils.get_current_time()
 
@@ -56,7 +69,7 @@ if __name__ == '__main__':
         name=f"{model_name}_{current_time}",
         notes="swin encoder",
         tags=[f"{model_name}", "Local"],
-        mode="online", #online disabled offline
+        mode=wandb_mode, #online disabled offline
         config={
             "model": model_name,
             "lr": lr,
@@ -78,11 +91,12 @@ if __name__ == '__main__':
         "hrsize": hrsize,
     }
 
+    laten_code_dim=256
     swin_encoder_config={
         "img_size": 16,
         "patch_size": 1,
         "in_chans": 1,
-        "embed_dim": 256,
+        "embed_dim": laten_code_dim,
         "depths": [4, 4, 4, 4],
         "num_heads": [4, 4, 4, 4],
         "window_size": 1,
@@ -92,16 +106,17 @@ if __name__ == '__main__':
 
     target_config={
         "out_features": 1,
-        "hidden_features": 64,
-        "num_hidden_layers": 3,
-        "use_pe": True,
-        "image_resolution": (lrsize, lrsize),
+        "hidden_features": 16,
+        "num_hidden_layers": 2,
+        "use_pe": False,
+        "num_frequencies": 10,
+        "use_hsine": True,
     }
 
     hyper_config={
-        "hyper_in_features": 256,
+        "hyper_in_features": laten_code_dim,
         "hyper_hidden_layers": 3,
-        "hyper_hidden_features": 256,
+        "hyper_hidden_features": laten_code_dim,
     }
 
     model_config={}
@@ -111,7 +126,8 @@ if __name__ == '__main__':
     config["model_config"] = model_config
 
     wandb.config.update({"model_config": model_config})
-    recorder.save_config_to_yaml(config)
+    if outfile:
+        recorder.save_config_to_yaml(config)
 
     #-----------------------------------------#
     # data
@@ -121,7 +137,7 @@ if __name__ == '__main__':
         scale=4,
     )
 
-    test=train_dataset[0]
+
     train_loader = DataLoader(train_dataset,
                               batch_size=batchsize,
                               shuffle=True,
@@ -137,7 +153,7 @@ if __name__ == '__main__':
         scale=4,
     )
     test_loader = DataLoader(test_dataset,
-                            batch_size=1,
+                            batch_size=32,
                               shuffle=False,
                               pin_memory=True,
                               drop_last=False,
@@ -146,7 +162,7 @@ if __name__ == '__main__':
     # 模型，优化器，调度器
 
 
-    target_net=modules.SimpleMLPNet(**target_config)
+    target_net=modules.SimpleMLPNetv1(**target_config)
     hyper_net=meta_modules.HyperNetwork(**hyper_config,
                                        target_module=target_net)
     encoder=SwinEncoder(**swin_encoder_config)
@@ -158,7 +174,7 @@ if __name__ == '__main__':
 
     criterion = nn.L1Loss()
     optimizer = torch.optim.Adam(net.parameters(), lr=lr)
-    lr_scheduler=torch.optim.lr_scheduler.StepLR(optimizer, step_size=200, gamma=0.5)
+    lr_scheduler=torch.optim.lr_scheduler.StepLR(optimizer, step_size=100, gamma=0.5)
 
     start_epoch=1
     # for train
@@ -195,11 +211,16 @@ if __name__ == '__main__':
                 trans=trans.to(device)
 
                 model_out= net(input,hr_coord)
+
                 sr_value=model_out['model_out']
 
+
                 loss=criterion(sr_value,gt)
+
                 optimizer.zero_grad()
                 loss.backward()
+                if target_config['use_hsine']:
+                    clip_grad_norm_(net.parameters(), max_norm=1.0)
                 optimizer.step()
 
                 epoch_loss.update(loss.item(),b)
@@ -240,9 +261,12 @@ if __name__ == '__main__':
 
                 sr_dem=sr_value.view(-1,1,hrsize,hrsize).detach().cpu()
                 gt=gt.view(-1,1,hrsize,hrsize).detach().cpu()
-                eval_res = dem_features.cal_DEM_metric(gt, sr_dem)
+                eval_res = dem_features.cal_DEM_metric(gt, sr_dem,reduction=None)
                 for key, value in eval_res.items():
-                    eval_results[key].append(value)
+                    if isinstance(value,list):
+                        eval_results[key].extend(value)
+                    else:
+                        eval_results[key].append(value)
 
                 # height_mae = torch.abs(sr_value - gt).mean(dim=(1, 2)).mean()
                 # height_rmse = torch.sqrt(torch.mean(torch.pow(sr_value - gt, 2), dim=(1, 2))).mean()
@@ -271,14 +295,14 @@ if __name__ == '__main__':
             best_epoch = epoch
             best_model=copy.deepcopy(net.state_dict())
 
-
-        if epoch % epoch_save == 0 or epoch == epochs:
-            model_path = os.path.join(model_save_path, f'{model_name}_{epoch}.pth')
-            torch.save(net.state_dict(), model_path)
-
-    best_model_path=os.path.join(model_save_path, f'best_{model_name}_{best_epoch}_{best_rmse:.4f}.pth')
-    torch.save(best_model, best_model_path)
-    logger.info(f'best model at {best_epoch} saved: {best_model_path}')
+        if outfile:
+            if epoch % epoch_save == 0 or epoch == epochs:
+                model_path = os.path.join(model_save_path, f'{model_name}_{epoch}.pth')
+                torch.save(net.state_dict(), model_path)
+    if outfile:
+        best_model_path=os.path.join(model_save_path, f'best_{model_name}_{best_epoch}_{best_rmse:.4f}.pth')
+        torch.save(best_model, best_model_path)
+        logger.info(f'best model at {best_epoch} saved: {best_model_path}')
 
     wandb.finish()
 

@@ -1,17 +1,18 @@
 import sys
 import os
 
-from utils import tools,other_imresize
-from dem_utils import dem_data_io
+import utils
+
+
 import matplotlib.pyplot as plt
 
 if __name__ == '__main__':
 
     test_dem=r'D:\Data\DEM_data\dataset_TfaSR\(60mor120m)to30m\DEM_Test\dem_2\dem2_2831.TIF'
-    dem=dem_data_io.read_dem(test_dem)
+    dem=utils.read_dem(test_dem)
 
     hr_dem=dem
-    lr_dem=other_imresize.cv2_imresize(hr_dem,1/4,mode="nearest")
+    lr_dem=utils.cv2_imresize(hr_dem,1/4,mode="nearest")
 
 
     fig,axes=plt.subplots(1,2)

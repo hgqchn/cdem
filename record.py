@@ -23,7 +23,7 @@ class Recorder():
         self.output_path = output_path
         self.tensorboard_writer=None
         self.use_tensorboard=use_tensorboard
-
+        self.outfile=outfile
         if not save_with_time:
             if extra_name:
                 self.save_path = os.path.join(self.output_path, extra_name)

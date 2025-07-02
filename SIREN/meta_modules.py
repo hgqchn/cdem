@@ -79,16 +79,16 @@ class HyperNetwork(nn.Module):
 
 #  卷积作为编码器处理2D图像
 class ConvolutionalNeuralProcessImplicit2DHypernet(nn.Module):
-    def __init__(self, in_features, out_features, image_resolution=None,
-                 target_hidden=256, target_hidden_layers=3,use_pe=False,
-                 embed_dim=256,hyper_hidden_layers=1, hyper_hidden_features=256
+    def __init__(self, in_features, out_features, image_resolution=None,embed_dim=256,
+                 target_hidden=256, target_hidden_layers=3,use_pe=False,use_hsine=False,num_frequencies=8,
+                 hyper_hidden_layers=2, hyper_hidden_features=256
                  ):
         super().__init__()
 
 
-        self.encoder = modules.ConvImgEncoder(channel=in_features, image_resolution=image_resolution)
-        self.target_net = modules.SimpleMLPNet(out_features=out_features, hidden_features=target_hidden, num_hidden_layers=target_hidden_layers,
-                                               image_resolution=image_resolution,use_pe=use_pe)
+        self.encoder = modules.ConvImgEncoder(channel=in_features, image_resolution=image_resolution,embde_dim=embed_dim)
+        self.target_net = modules.SimpleMLPNetv1(out_features=out_features, hidden_features=target_hidden, num_hidden_layers=target_hidden_layers,
+                                              use_pe=use_pe,use_hsine=use_hsine,num_frequencies=num_frequencies)
         self.hyper_net = HyperNetwork(hyper_in_features=embed_dim, hyper_hidden_layers=hyper_hidden_layers, hyper_hidden_features=hyper_hidden_features,
                                       target_module=self.target_net)
         #print(self)

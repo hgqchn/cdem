@@ -6,6 +6,8 @@ import math
 import torch.nn.functional as F
 
 import re
+
+import utils
 from utils import gradient
 
 # 获取模型参数
@@ -81,6 +83,18 @@ class BatchLinear(nn.Linear, MetaModule):
 
         bias = params.get('bias', None)
         weight = params['weight']
+
+        # # ✅ NaN 检查（输入/权重/偏置）
+        # if torch.isnan(input).any():
+        #     print("❌ NaN in input")
+        #     a=1
+        # if torch.isnan(weight).any():
+        #     print("❌ NaN in weight")
+        #     a=1
+        # if bias is not None and torch.isnan(bias).any():
+        #     print("❌ NaN in bias")
+        #     a=1
+
         # 其余维度不变，交换最后两个维度
         # weight的形状为 [batchsize, out_features,in_features]
         # 交换维度后的形状为 [batchsize, in_features,out_features]
@@ -101,6 +115,16 @@ class Sine(nn.Module):
     def forward(self, input):
         # See paper sec. 3.2, final paragraph, and supplement Sec. 1.5 for discussion of factor 30
         return torch.sin(30 * input)
+
+# 三角激活函数
+class HSine(nn.Module):
+    def __init(self):
+        super().__init__()
+
+    def forward(self, input):
+        # paper H-SIREN
+        x=torch.sinh(2*input)
+        return torch.sin(30*x)
 
 
 class FCBlock(MetaModule):
@@ -157,6 +181,81 @@ class FCBlock(MetaModule):
         if first_layer_init is not None: # Apply special initialization to first layer, if applicable.
             self.net[0].apply(first_layer_init)
 
+    def forward(self, inputs, params=None, **kwargs):
+        if params is None:
+            params = OrderedDict(self.named_parameters())
+
+        # key 'net' 对应于self.net
+        output = self.net(inputs, params=get_subdict(params, 'net'))
+        return output
+
+    def forward_with_activations(self, coords, params=None, retain_grad=False):
+        '''Returns not only model output, but also intermediate activations.'''
+        if params is None:
+            params = OrderedDict(self.named_parameters())
+
+        activations = OrderedDict()
+
+        x = coords.clone().detach().requires_grad_(True)
+        activations['input'] = x
+        for i, layer in enumerate(self.net):
+            subdict = get_subdict(params, 'net.%d' % i)
+            for j, sublayer in enumerate(layer):
+                if isinstance(sublayer, BatchLinear):
+                    x = sublayer(x, params=get_subdict(subdict, '%d' % j))
+                else:
+                    x = sublayer(x)
+
+                if retain_grad:
+                    x.retain_grad()
+                activations['_'.join((str(sublayer.__class__), "%d" % i))] = x
+        return activations
+
+class FCBlock_Hsine(MetaModule):
+    '''
+    use sinh as first layer activation function
+    '''
+
+    def __init__(self, in_features, out_features, num_hidden_layers, hidden_features,
+                 outermost_linear=False, use_hsine=True):
+        # outermost_linear: If True, the last layer is linear, otherwise it is non-linear.
+        super().__init__()
+
+
+        nl=Sine()
+        nl_weight_init = sine_init
+        first_layer_init = first_layer_sine_init
+
+
+        self.net = []
+        # first_layer
+        if use_hsine:
+            self.net.append(MetaSequential(
+                BatchLinear(in_features, hidden_features),HSine()
+            ))
+        else:
+            self.net.append(MetaSequential(
+                BatchLinear(in_features, hidden_features), nl
+            ))
+
+        for i in range(num_hidden_layers):
+            self.net.append(MetaSequential(
+                BatchLinear(hidden_features, hidden_features), nl
+            ))
+
+        if outermost_linear:
+            self.net.append(MetaSequential(BatchLinear(hidden_features, out_features)))
+        else:
+            self.net.append(MetaSequential(
+                BatchLinear(hidden_features, out_features), nl
+            ))
+
+        self.net = MetaSequential(*self.net)
+        self.net.apply(nl_weight_init)
+
+        if first_layer_init is not None: # Apply special initialization to first layer, if applicable.
+            self.net[0].apply(first_layer_init)
+
     def forward(self, coords, params=None, **kwargs):
         if params is None:
             params = OrderedDict(self.named_parameters())
@@ -187,6 +286,53 @@ class FCBlock(MetaModule):
                 activations['_'.join((str(sublayer.__class__), "%d" % i))] = x
         return activations
 
+class SimpleMLPNetv1(MetaModule):
+    def __init__(self,
+                 out_features=1,
+                 hidden_features=256,
+                 num_hidden_layers=3,
+                 use_pe=True,
+                 num_frequencies=8,
+                 use_hsine=False,
+                 ):
+        super().__init__()
+
+        self.use_pe = use_pe
+        self.positional_encoding = PosEncodingNeRF2D(num_frequencies=num_frequencies)
+        if self.use_pe:
+            in_features = self.positional_encoding.out_dim
+        else:
+            in_features = 2
+
+        self.net = FCBlock_Hsine(in_features=in_features, out_features=out_features, num_hidden_layers=num_hidden_layers,
+                           hidden_features=hidden_features, outermost_linear=True, use_hsine=use_hsine)
+        #print(self)
+
+    def forward(self, coords, params=None,return_grad=False):
+        if params is None:
+            params = OrderedDict(self.named_parameters())
+
+        # Enables us to compute gradients w.r.t. coordinates
+        coords_org = coords.clone().detach().requires_grad_(True)
+        coords = coords_org
+
+        # various input processing methods for different applications
+        if self.use_pe:
+            coords = self.positional_encoding(coords)
+
+        output = self.net(coords, get_subdict(params, 'net'))
+
+        if return_grad:
+            dy_dx = gradient(output, coords_org, grad_outputs=torch.ones_like(output))
+            return {'model_in': coords_org, 'model_out': output, 'dy_dx': dy_dx}
+        else:
+            return {'model_in': coords_org, 'model_out': output}
+
+    def forward_with_activations(self, coords):
+        '''Returns not only model output, but also intermediate activations.'''
+        coords = coords.clone().detach().requires_grad_(True)
+        activations = self.net.forward_with_activations(coords)
+        return {'model_in': coords, 'model_out': activations.popitem(), 'activations': activations}
 
 class SimpleMLPNet(MetaModule):
 
@@ -292,26 +438,27 @@ class PosEncodingNeRF2D(nn.Module):
 
 
 class ConvImgEncoder(nn.Module):
-    def __init__(self, channel, image_resolution):
+    def __init__(self, channel, image_resolution,embde_dim=256):
         super().__init__()
 
+        self.embde_dim = embde_dim
         if isinstance(image_resolution, tuple) or isinstance(image_resolution, list):
             image_size= image_resolution[0] * image_resolution[1]
         else:
             image_size = image_resolution ** 2
 
         # conv_theta is input convolution
-        self.conv_theta = nn.Conv2d(channel, 128, 3, 1, 1)
+        self.conv_theta = nn.Conv2d(channel, embde_dim, 3, 1, 1)
         self.relu = nn.ReLU(inplace=True)
 
         self.cnn = nn.Sequential(
-            nn.Conv2d(128, 256, 3, 1, 1),
+            nn.Conv2d(embde_dim, embde_dim, 3, 1, 1),
             nn.ReLU(),
-            Conv2dResBlock(256, 256),
-            Conv2dResBlock(256, 256),
-            Conv2dResBlock(256, 256),
-            Conv2dResBlock(256, 256),
-            nn.Conv2d(256, 256, 1, 1, 0)
+            Conv2dResBlock(embde_dim, embde_dim),
+            Conv2dResBlock(embde_dim, embde_dim),
+            Conv2dResBlock(embde_dim, embde_dim),
+            Conv2dResBlock(embde_dim, embde_dim),
+            nn.Conv2d(embde_dim, embde_dim, 1, 1, 0)
         )
 
         self.relu_2 = nn.ReLU(inplace=True)
@@ -328,7 +475,7 @@ class ConvImgEncoder(nn.Module):
         o = self.cnn(o)
 
         # B,256,H*W ->B,256,1 -> B,256
-        o = self.fc(self.relu_2(o).view(o.shape[0], 256, -1)).squeeze(-1)
+        o = self.fc(self.relu_2(o).view(o.shape[0], self.embde_dim, -1)).squeeze(-1)
         return o
 
 
@@ -488,6 +635,8 @@ def compl_mul(x, y):
     return out
 
 
+
+
 if __name__ == '__main__':
     # test_linear=BatchLinear(in_features=2, out_features=1)
     # test_input=torch.randn(5,4,2)
@@ -495,11 +644,11 @@ if __name__ == '__main__':
     #
     # linear=nn.Linear(in_features=2, out_features=1)
     # out2=linear(test_input)
-    simple_mlp=SimpleMLPNet(out_features=1,
-                            hidden_features=64,
-                            num_hidden_layers=3,
-                            num_frequencies=8,
-                            image_resolution=(16, 16))
+    # simple_mlp=SimpleMLPNet(out_features=1,
+    #                         hidden_features=64,
+    #                         num_hidden_layers=3,
+    #                         num_frequencies=8,
+    #                         image_resolution=(16, 16))
 
     # model=simple_mlp
     # param_size=0
@@ -507,21 +656,42 @@ if __name__ == '__main__':
     #     param_size+=param.numel()*param.element_size()  # 计算参数的字节大小
     # size_res=param_size/1024  # 返回参数的字节大小
 
-    batch_linear= BatchLinear(in_features=3, out_features=2)
-    print(batch_linear)
-    print(OrderedDict(batch_linear.named_parameters()))
+    # batch_linear= BatchLinear(in_features=3, out_features=2)
+    # print(batch_linear)
+    # print(OrderedDict(batch_linear.named_parameters()))
+    #
+    # test_input=torch.randn(5,4,3)
+    # weight_params=nn.Parameter(torch.randn(5, 3, 2))
+    # test_params={
+    #     'weight':  torch.randn(5, 2, 3),
+    #     'bias': torch.randn(5, 2)
+    # }
+    #
+    # out=batch_linear(test_input)
+    # out2=batch_linear(test_input,test_params)
 
-    test_input=torch.randn(5,4,3)
-    weight_params=nn.Parameter(torch.randn(5, 3, 2))
-    test_params={
-        'weight':  torch.randn(5, 2, 3),
-        'bias': torch.randn(5, 2)
-    }
+    # fcb_block= FCBlock(in_features=2, out_features=1, num_hidden_layers=3,hidden_features=4)
+    # print(fcb_block)
+    # print(OrderedDict(fcb_block.named_parameters()))
 
-    out=batch_linear(test_input)
-    out2=batch_linear(test_input,test_params)
+    fcb_hsine=FCBlock_Hsine(in_features=2, out_features=1, num_hidden_layers=2,hidden_features=16,use_hsine=False)
+    print(utils.get_parameter_nums(fcb_hsine))
+    torch.save(fcb_hsine.state_dict(),"test.pth")
 
-    fcb_block= FCBlock(in_features=2, out_features=1, num_hidden_layers=3,hidden_features=4)
-    print(fcb_block)
-    print(OrderedDict(fcb_block.named_parameters()))
+
+    # for debug
+    # 注册hook
+    # outputs = {}
+    #
+    #
+    # def register_hooks(model):
+    #     for name, module in model.named_modules():
+    #         def hook_fn(module, inp, outp, layer_name=name):
+    #             outputs[layer_name] = (inp[0], outp)
+    #         module.register_forward_hook(hook_fn)
+    # register_hooks(fcb_hsine)
+    #
+    # input=torch.randn(1,2)
+    # output= fcb_hsine(input)
+
     pass

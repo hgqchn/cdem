@@ -694,6 +694,30 @@ def partial_function(func,*args,**kwargs):
     except Exception as e:
         raise TypeError(f"partial 失败: {e}")
 
+def check_model_nan(model):
+    """
+    检查模型参数中是否存在 NaN。
+    :param model: nn.Module
+    :return: True 如果存在 NaN，否则 False
+    """
+    has_nan = False
+    for name, param in model.named_parameters():
+        if torch.isnan(param).any():
+            print(f"参数 {name} 存在 NaN")
+            has_nan = True
+    if not has_nan:
+        print("模型参数中未发现 NaN。")
+    return has_nan
+
+
+def check_tensor_valid(tensor, name="Tensor"):
+    if torch.isnan(tensor).any():
+        return False
+    if torch.isinf(tensor).any():
+        return False
+    return True
+
+
 if __name__ == '__main__':
     #print(__name__)
     # logger=custom_logger(__name__)
