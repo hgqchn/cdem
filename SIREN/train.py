@@ -21,7 +21,7 @@ import dem_features
 from SIREN import meta_modules
 from SIREN.dataset import DEMFolder, ImplicitDownsampled,value_denorm
 
-torch.autograd.set_detect_anomaly(True)
+#torch.autograd.set_detect_anomaly(True)
 
 if __name__ == '__main__':
 
@@ -52,7 +52,7 @@ if __name__ == '__main__':
 
     model_name="SIREN"
     lr=1e-4
-    epochs=200
+    epochs=500
     batchsize=64
 
     current_time = utils.get_current_time()
@@ -89,14 +89,14 @@ if __name__ == '__main__':
     }
 
 
-
+    embed_dim=512
     model_config={
         "in_features": 1,
         "out_features": 1,
         "image_resolution": (16, 16),
-        "embed_dim": 512,
+        "embed_dim": embed_dim,
 
-        "target_hidden": 16,
+        "target_hidden": 32,
         "target_hidden_layers": 2,
         "use_pe": False,
         "num_frequencies": 8,
@@ -104,7 +104,7 @@ if __name__ == '__main__':
 
 
         "hyper_hidden_layers": 3,
-        "hyper_hidden_features": 512
+        "hyper_hidden_features": embed_dim,
     }
 
     config["model_config"]=model_config

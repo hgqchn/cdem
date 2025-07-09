@@ -86,7 +86,8 @@ class ConvolutionalNeuralProcessImplicit2DHypernet(nn.Module):
         super().__init__()
 
 
-        self.encoder = modules.ConvImgEncoder(channel=in_features, image_resolution=image_resolution,embde_dim=embed_dim)
+        self.encoder = modules.ConvImgEncoder(channel=in_features, image_resolution=image_resolution,
+                                              embed_dim=embed_dim)
         self.target_net = modules.SimpleMLPNetv1(out_features=out_features, hidden_features=target_hidden, num_hidden_layers=target_hidden_layers,
                                               use_pe=use_pe,use_hsine=use_hsine,num_frequencies=num_frequencies)
         self.hyper_net = HyperNetwork(hyper_in_features=embed_dim, hyper_hidden_layers=hyper_hidden_layers, hyper_hidden_features=hyper_hidden_features,
@@ -102,7 +103,9 @@ class ConvolutionalNeuralProcessImplicit2DHypernet(nn.Module):
 
         model_output = self.target_net(coords, params=hypo_params)
 
-        return {'coord': model_output['model_in'], 'model_out': model_output['model_out'], 'latent_vec': embedding,
+        return {'coord': model_output['model_in'],
+                'model_out': model_output['model_out'],
+                'latent_vec': embedding,
                 'hypo_params': hypo_params}
 
     def get_hypo_net_weights(self, model_input):

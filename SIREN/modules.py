@@ -116,15 +116,21 @@ class Sine(nn.Module):
         # See paper sec. 3.2, final paragraph, and supplement Sec. 1.5 for discussion of factor 30
         return torch.sin(30 * input)
 
-# 三角激活函数
+# HSine激活函数
 class HSine(nn.Module):
-    def __init(self):
+    def __init__(self):
         super().__init__()
 
     def forward(self, input):
         # paper H-SIREN
+        # 裁剪输入范围
+        #input = torch.clamp(input, min=-10, max=10)
+        input=torch.tanh(input)
         x=torch.sinh(2*input)
-        return torch.sin(30*x)
+        x=torch.sin(30*x)
+        # if torch.isnan(x).any():
+        #     a=1
+        return x
 
 
 class FCBlock(MetaModule):
@@ -217,7 +223,7 @@ class FCBlock_Hsine(MetaModule):
     '''
 
     def __init__(self, in_features, out_features, num_hidden_layers, hidden_features,
-                 outermost_linear=False, use_hsine=True):
+                 outermost_linear=True, use_hsine=False):
         # outermost_linear: If True, the last layer is linear, otherwise it is non-linear.
         super().__init__()
 
@@ -438,27 +444,27 @@ class PosEncodingNeRF2D(nn.Module):
 
 
 class ConvImgEncoder(nn.Module):
-    def __init__(self, channel, image_resolution,embde_dim=256):
+    def __init__(self, channel, image_resolution, embed_dim=256):
         super().__init__()
 
-        self.embde_dim = embde_dim
+        self.embed_dim = embed_dim
         if isinstance(image_resolution, tuple) or isinstance(image_resolution, list):
             image_size= image_resolution[0] * image_resolution[1]
         else:
             image_size = image_resolution ** 2
 
         # conv_theta is input convolution
-        self.conv_theta = nn.Conv2d(channel, embde_dim, 3, 1, 1)
+        self.conv_theta = nn.Conv2d(channel, embed_dim, 3, 1, 1)
         self.relu = nn.ReLU(inplace=True)
 
         self.cnn = nn.Sequential(
-            nn.Conv2d(embde_dim, embde_dim, 3, 1, 1),
+            nn.Conv2d(embed_dim, embed_dim, 3, 1, 1),
             nn.ReLU(),
-            Conv2dResBlock(embde_dim, embde_dim),
-            Conv2dResBlock(embde_dim, embde_dim),
-            Conv2dResBlock(embde_dim, embde_dim),
-            Conv2dResBlock(embde_dim, embde_dim),
-            nn.Conv2d(embde_dim, embde_dim, 1, 1, 0)
+            Conv2dResBlock(embed_dim, embed_dim),
+            Conv2dResBlock(embed_dim, embed_dim),
+            Conv2dResBlock(embed_dim, embed_dim),
+            Conv2dResBlock(embed_dim, embed_dim),
+            nn.Conv2d(embed_dim, embed_dim, 1, 1, 0)
         )
 
         self.relu_2 = nn.ReLU(inplace=True)
@@ -475,7 +481,7 @@ class ConvImgEncoder(nn.Module):
         o = self.cnn(o)
 
         # B,256,H*W ->B,256,1 -> B,256
-        o = self.fc(self.relu_2(o).view(o.shape[0], self.embde_dim, -1)).squeeze(-1)
+        o = self.fc(self.relu_2(o).view(o.shape[0], self.embed_dim, -1)).squeeze(-1)
         return o
 
 
@@ -674,7 +680,7 @@ if __name__ == '__main__':
     # print(fcb_block)
     # print(OrderedDict(fcb_block.named_parameters()))
 
-    fcb_hsine=FCBlock_Hsine(in_features=2, out_features=1, num_hidden_layers=2,hidden_features=16,use_hsine=False)
+    fcb_hsine=FCBlock_Hsine(in_features=2, out_features=1, num_hidden_layers=2,hidden_features=32,use_hsine=False)
     print(utils.get_parameter_nums(fcb_hsine))
     torch.save(fcb_hsine.state_dict(),"test.pth")
 
