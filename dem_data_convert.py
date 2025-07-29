@@ -143,7 +143,7 @@ def tensor4D_maxmin_norm(data, norm_range=(-1, 1), epsilon=1e-6,minmax_height=No
 
 def tensor_maxmin_trans(data,trans):
     """
-    for single DEM
+    for single DEM norm use trans
     :param data: tensor： 1 H W
     :param trans: tensor： 3
     :return: tensor： 1 H W

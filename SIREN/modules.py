@@ -680,9 +680,9 @@ if __name__ == '__main__':
     # print(fcb_block)
     # print(OrderedDict(fcb_block.named_parameters()))
 
-    fcb_hsine=FCBlock_Hsine(in_features=2, out_features=1, num_hidden_layers=2,hidden_features=32,use_hsine=False)
+    fcb_hsine=FCBlock_Hsine(in_features=2, out_features=1, num_hidden_layers=2,hidden_features=16,use_hsine=False)
     print(utils.get_parameter_nums(fcb_hsine))
-    torch.save(fcb_hsine.state_dict(),"test.pth")
+    #torch.save(fcb_hsine.state_dict(),"test.pth")
 
 
     # for debug

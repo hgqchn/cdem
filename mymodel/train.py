@@ -1,5 +1,6 @@
 import sys
 import os
+
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 import numpy as np
 from functools import partial
@@ -92,7 +93,7 @@ if __name__ == '__main__':
     }
     target_config={
         "out_features": 1,
-        "hidden_features": 16,
+        "hidden_features": 64,
         "num_hidden_layers": 2,
         "use_pe": False,
         "num_frequencies": 10,
@@ -165,8 +166,8 @@ if __name__ == '__main__':
                              target_net=target_net)
     net.to(device)
 
-    #contentloss=nn.MSELoss()
-    contentloss=nn.L1Loss()
+    contentloss=nn.MSELoss()
+    #contentloss=nn.L1Loss()
     slopeloss=loss_module.SlopeLoss().to(device)
 
 
@@ -267,10 +268,8 @@ if __name__ == '__main__':
                 gt=gt.view(-1,1,hrsize,hrsize).detach().cpu()
                 eval_res = dem_features.cal_DEM_metric(gt, sr_dem,reduction=None)
                 for key, value in eval_res.items():
-                    if isinstance(value,list):
-                        eval_results[key].extend(value)
-                    else:
-                        eval_results[key].append(value)
+                    eval_results[key].extend(value)
+
 
                 # height_mae = torch.abs(sr_value - gt).mean(dim=(1, 2)).mean()
                 # height_rmse = torch.sqrt(torch.mean(torch.pow(sr_value - gt, 2), dim=(1, 2))).mean()

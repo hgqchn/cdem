@@ -2,6 +2,8 @@ import sys
 import os
 import numpy as np
 import matplotlib.pyplot as plt
+import utils
+
 
 def read_txt(file_path):
     """
@@ -21,43 +23,35 @@ def read_txt(file_path):
     dtype = [('time', float), ('vel', float), ('posx', float),
              ('posy', float), ('posz', float), ('ticktime(ms)', float)]
 
+    # 结构化数组
     structured_data = np.array([tuple(d.values()) for d in data], dtype=dtype)
 
     return structured_data
 
 
 
+
 if __name__ == '__main__':
 
-    hr_file=r'6dof_output_hr.txt'
-    hr_data = read_txt(hr_file)
-    hr_x= hr_data['posx'][:200][::10]  # 只取前100个点
-    hr_y = hr_data['posy'][:200][::10]  # 只取前100个点
+    dem_name=r'dem0_0.TIF'
+    dem_idx=0
+    dem_file=fr'D:\Data\DEM_data\dataset_TfaSR\(60mor120m)to30m\DEM_Test\dem_{dem_idx}\{dem_name}'
+    dem = utils.read_dem(dem_file)
 
-    plt.scatter(hr_x, hr_y,s=1,color='red',label='hr',marker='*')  # s=点的大小
-    
-    lr_file=r'6dof_output_lr.txt'
-    lr_data = read_txt(lr_file)
-    lr_x= lr_data['posx'][:200][::10]
-    lr_y = lr_data['posy'][:200][::10]
 
-    plt.scatter(lr_x, lr_y,s=1,color='blue',label='lr',marker='^')
+    hr_file=r'files1\\6dof_output_hr.txt'
+    hr_data = read_txt(hr_file)[:1500]
+    hr_x= hr_data['posx']
+    hr_y = hr_data['posy']
+    hr_z=hr_data['posz']
 
-    mlp_file=r'6dof_output_sr.txt'
-    mlp_data = read_txt(mlp_file)
-    mlp_x= mlp_data['posx'][:200][::10]
-    mlp_y = mlp_data['posy'][:200][::10]
+    hr_vel=hr_data['vel']
+    hr_zero_indices = np.where(hr_vel == 0)[0]
 
-    plt.scatter(mlp_x, mlp_y,s=1,color='green',label='mlp',marker='x')
-
-    plt.xlabel('X')
-    plt.ylabel('Y')
-    plt.title('Multi-Trajectory Scatter')
-    #plt.grid(True)
-    #plt.axis('equal')
+    plt.figure()
+    plt.imshow(dem, cmap='terrain')
+    plt.scatter(hr_x/30+5, hr_y/30+5,s=1,color='red',label='hr',marker='*')  # s=点的大小
+    plt.axis('off')
+    #plt.title('Trajectory with fixed direction')
+    plt.savefig('固定路径.png', bbox_inches='tight', pad_inches=0)
     plt.show()
-
-
-
-
-    pass

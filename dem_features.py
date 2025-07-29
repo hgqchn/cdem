@@ -176,10 +176,11 @@ def cal_DEM_metric(demA, demB, padding=None, device=None, reduction="mean",slope
         demA_tensor=demA_tensor.to(device)
         demB_tensor=demB_tensor.to(device)
     else:
-        if demA_tensor.is_cuda:
-            device=demA_tensor.device
-            slope_net.to(device)
-            aspect_net.to(device)
+        device=demA_tensor.device
+        slope_net.to(device)
+        aspect_net.to(device)
+        demB_tensor=demB_tensor.to(device)
+
     with torch.inference_mode():
         demA_slope = slope_net(demA_tensor)
         demB_slope = slope_net(demB_tensor)
@@ -197,15 +198,15 @@ def cal_DEM_metric(demA, demB, padding=None, device=None, reduction="mean",slope
     aspect_mae=torch.abs(demA_aspect - demB_aspect).mean(dim=(1,2,3))
     aspect_rmse=torch.sqrt(torch.mean(torch.pow(demA_aspect - demB_aspect, 2), dim=(1,2,3)))
     aspect_max_error,_=torch.abs(demA_aspect - demB_aspect).view(B,-1).max(dim=1)
-    #B,1 -> 1
+    #B -> 1
     if reduction=="mean":
-        height_mae=height_mae.mean()
-        height_rmse=height_rmse.mean()
-        slope_mae=slope_mae.mean()
-        aspect_mae=aspect_mae.mean()
-        slope_rmse=slope_rmse.mean()
-        aspect_rmse=aspect_rmse.mean()
-    # if None return list, size B
+        height_mae=height_mae.mean(dim=0,keepdim=True)
+        height_rmse=height_rmse.mean(dim=0,keepdim=True)
+        slope_mae=slope_mae.mean(dim=0,keepdim=True)
+        aspect_mae=aspect_mae.mean(dim=0,keepdim=True)
+        slope_rmse=slope_rmse.mean(dim=0,keepdim=True)
+        aspect_rmse=aspect_rmse.mean(dim=0,keepdim=True)
+    # if None return size B
     return {
         'height_mae': height_mae.cpu().numpy(),
         'height_rmse': height_rmse.cpu().numpy(),
@@ -384,4 +385,16 @@ if __name__=="__main__":
     dem_a=torch.randn(2,1,32,32)
     dem_b=torch.randn(2,1,32,32)
     res=cal_DEM_metric(dem_a,dem_b,reduction=None)
+    res_mean=cal_DEM_metric(dem_a,dem_b,reduction="mean")
+    height_mae=torch.abs(dem_a - dem_b).mean(dim=(1,2,3))
+
+
+    mean_no=height_mae.numpy()
+
+    mean_yes=torch.mean(height_mae,dim=0,keepdim=True).numpy()
+
+    list1=[]
+    list2=[]
+    list1.extend(mean_no)
+    list2.extend(mean_yes)
     pass

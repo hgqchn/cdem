@@ -2,7 +2,7 @@ import sys
 import os
 import numpy as np
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 import torch.nn.functional as F
 
 import random
@@ -63,8 +63,6 @@ class DEMFolder(Dataset):
     def __len__(self):
         return len(self.dem_list)
 
-
-
 class ImplicitDownsampled(Dataset):
     def __init__(self,
                  dataset, #DEMFolder 类
@@ -104,12 +102,73 @@ class ImplicitDownsampled(Dataset):
         # 3
         return lr,hr_coord,hr_value,trans
 
+class DEMImplicit_Folder_pair(Dataset):
+    def __init__(self, hr_dir,lr_dir, norm_range=(-1, 1), epsilon=1e-6,minmax_height=None
+                 ):
+        super(DEMImplicit_Folder_pair, self).__init__()
+        self.dem_hrlist = utils.get_dem_paths_all(hr_dir)
+        self.dem_lrlist = utils.get_dem_paths_all(lr_dir)
+
+        self.norm_range = norm_range
+        self.epsilon = epsilon
 
 
+        # 使用传入的min max值进行归一化，而不是每个dem分别maxmin归一化
+        self.minmax_height=minmax_height
 
+    def __getitem__(self, index):
+        hr_file=self.dem_hrlist[index]
+        lr_file=self.dem_lrlist[index]
+        filename = utils.get_filename(hr_file)
+        lr_filename= utils.get_filename(lr_file)
+        assert filename==lr_filename
+
+        hr=utils.read_dem(hr_file)
+        lr=utils.read_dem(lr_file)
+
+        # 64 64 -> 1 64 64
+        hr_t = torch.from_numpy(hr).unsqueeze(0).float()
+        lr_t = torch.from_numpy(lr).unsqueeze(0).float()
+
+        # # 训练用的这个,错的
+        # hr_norm, trans = dem_data_convert.tensor_maxmin_norm(hr_t, self.norm_range, self.epsilon,self.minmax_height)
+        # lr_norm = dem_data_convert.tensor_maxmin_trans(lr_t, trans)
+        # 应该用这个
+        lr_norm, trans = dem_data_convert.tensor_maxmin_norm(lr_t, self.norm_range, self.epsilon,self.minmax_height)
+        hr_norm = dem_data_convert.tensor_maxmin_trans(hr_t, trans)
+
+        #坐标，值对
+        # hr_coord: H*W,2 范围-1,1
+        # hr_value: H*W,1
+        hr_coord, hr_value =utils.to_pixel_samples_tensor(hr_norm.contiguous())
+
+        return lr_norm,hr_norm,hr_coord,hr_value,trans,filename
+
+    def __len__(self):
+        return len(self.dem_hrlist)
 
 
 if __name__ == '__main__':
+    test_dataset = DEMImplicit_Folder_pair(r'D:\Data\DEM_data\dataset_TfaSR\(60mor120m)to30m\DEM_Test',
+                                           r'D:\Data\DEM_data\dataset_TfaSR\(60mor120m)to30m\DEM_Test_NN_120m'
+                            )
 
+    test_loader = DataLoader(test_dataset,
+                             batch_size=32,
+                             shuffle=False,
+                             pin_memory=True,
+                             drop_last=False,
+                             num_workers=4)
 
+    data=next(iter(test_loader))
+
+    hr=data[1]
+    hr_value=data[3]
+    trans= data[4]
+    hr_=dem_data_convert.tensor4D_maxmin_denorm(hr,trans)
+    hr_denorm = value_denorm(hr_value, trans)
+    hr1_denorm = hr_denorm[0]
+    hr1_denorm = hr1_denorm.view(1,64,64)
+    hr1=hr_[0]
+    torch.equal(hr1, hr1_denorm)
     pass

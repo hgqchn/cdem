@@ -172,7 +172,7 @@ if __name__ == '__main__':
     axes[3,2].imshow(sr_grad_dy.squeeze(0).squeeze(0).detach().cpu().numpy())
     axes[3,2].set_title('SR grad dy')
 
-    plt.savefig("dem0_0_dxdy.png")
+    #plt.savefig("dem0_0_dxdy.png")
     plt.show(block=True)
 
 
